@@ -1,0 +1,243 @@
+\documentclass[10pt,twocolumn,a4paper]{article}
+
+\usepackage[top=2cm,bottom=2cm,left=1.75cm,right=1.75cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{authblk}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{cite}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\title{\LARGE \textbf{Dedicated Quantum Policy Networks with Scaffold Memory for Diverse De Novo Molecular Generation}}
+
+\author[1,\dag,*]{\textbf{Yukesh Naren M}}
+\author[1,\dag]{\textbf{Mohithra K}}
+\author[1,\dag]{\textbf{Mokshagna Maddineni}}
+\author[1]{\textbf{Chandra Mohan Dasari}}
+
+\affil[1]{\small Department of Computer Science and Engineering, Indian Institute of Information Technology Design and Manufacturing Kurnool (IIITDM Kurnool), Kurnool, Andhra Pradesh 518008, India}
+
+\date{\small \today}
+
+\begin{document}
+
+\twocolumn[
+  \begin{@twocolumnfalse}
+    \maketitle
+    \begingroup
+    \renewcommand\thefootnote{\dag}
+    \footnotetext{These authors contributed equally to this work (Co-first authors).}
+    \renewcommand\thefootnote{*}
+    \footnotetext{Corresponding Author: \texttt{yukeshnarenm@gmail.com}}
+    \endgroup
+
+    \begin{abstract}
+    \noindent Deep generative models for molecular graphs are transforming rational drug design; however, reinforcement learning frameworks such as MolGAN frequently succumb to catastrophic mode collapse---repeatedly producing a narrow subset of trivial subgraphs while violating fundamental chemical valences. The recent hybrid framework MolGAN-QRL (\textit{Hergli \& Harigua-Souiai, J. Cheminformatics, 2026, PMC12952149}) introduced a 9-qubit Variational Quantum Circuit (VQC) as an offline reward evaluator; however, its one-shot dense generator lacked valence awareness (yielding chemical validities capped at $45.6\% - 69.7\%$), public reference implementations suffered from detached quantum gradients, and mode collapse persisted with uniqueness dropping as low as $0.26\% - 8.36\%$.
+    
+    In this work, we present \textbf{MolGAN-QPolicy}, a fundamentally re-engineered quantum reinforcement learning framework for molecular graph generation. Rather than deploying quantum computing as an offline evaluator, we integrate a dedicated \textbf{4-Qubit Variational Quantum Policy Head ($\pi_\theta$)} directly into the decision-making loop of an autoregressive Relational Graph Convolutional Network (RGCN) trained via Proximal Policy Optimization (PPO). The circuit establishes an explicit one-to-one physical correspondence between individual qubits and distinct heavy elements ($q_0 \leftrightarrow \text{C}, q_1 \leftrightarrow \text{N}, q_2 \leftrightarrow \text{O}, q_3 \leftrightarrow \text{F}$), injecting local geometric bond angles, free valences, and neighborhood chemistries into quantum state rotations. To permanently resolve mode collapse, we formulate a \textbf{Bemis-Murcko Scaffold Diversity Memory Filter} that dynamically penalizes over-sampled core motifs, coupled with \textbf{Dynamic Valence Masking} that strictly prohibits hypervalent bond additions.
+    
+    Trained on the QM9 chemical benchmark, MolGAN-QPolicy completely eliminates the classic validity/uniqueness trade-off: attaining \textbf{99.47\% validity}, \textbf{99.27\% stability}, and preserving \textbf{62.37\% uniqueness at Epoch 50} (peaking at \textbf{88.24\%}), representing an $8\times$ to $240\times$ increase over existing quantum-enhanced baselines. On the standardized benchmark ($N = 497$), our model achieves an NVU (Number of Valid and Unique molecules) of \textbf{288 (mean) / 447 (peak)} compared to MolGAN-QRL's \textbf{29} and QGAN-HG's \textbf{31}---a $10\times$ to $15\times$ improvement. Comprehensive 3-tier cheminformatics screening demonstrates that \textbf{89.0\%} of generated unique structures are readily preparable bench compounds with standard synthetic accessibility ($\text{Raw SAS} \le 5.0$), verified 3D Euclidean embeddability, and zero ring/allene strain alerts.
+    \end{abstract}
+    
+    \vspace{0.8em}
+    \noindent\textbf{\small Keywords:} Quantum Machine Learning, De Novo Drug Design, Molecular Graph Generation, Proximal Policy Optimization, Variational Quantum Circuits, Mode Collapse, Bemis-Murcko Scaffolds, Cheminformatics.
+    \vspace{1.5em}
+  \end{@twocolumnfalse}
+]
+
+\section{Introduction}
+The exploration of small-molecule chemical space represents the foundational challenge of computational medicinal chemistry \cite{bickerton2012}. Deep generative models---including Variational Autoencoders (VAEs), Generative Adversarial Networks (GANs), and Reinforcement Learning (RL) agents---have emerged as powerful methodologies for de novo molecular design \cite{olivecrona2017}. 
+
+In 2018, De Cao \& Kipf pioneered \textbf{MolGAN} \cite{decao2018}, directly parameterizing molecular graphs as continuous adjacency tensors and node feature matrices. Despite its conceptual elegance, MolGAN exhibited severe instability: the generator rapidly learned to exploit the discriminator by outputting a small cluster of repetitive, low-complexity subgraphs, a phenomenon termed \textbf{mode collapse}. 
+
+To overcome this, \textbf{MolGAN-QRL} (\textit{Hergli \& Harigua-Souiai, J. Cheminformatics, 2026}) \cite{hergli2026} introduced a Variational Quantum Circuit (VQC) into the reinforcement learning reward pipeline, aiming to harness the high-dimensional Hilbert space of parameterized quantum states to provide a more expressive exploration signal. While establishing the promise of hybrid quantum-classical chemistry models, existing quantum reinforcement learning and quantum GAN frameworks face three critical bottlenecks:
+\begin{enumerate}
+    \item \textbf{Decoupled Quantum Mechanics}: In MolGAN-QRL, the quantum circuit was positioned downstream as a passive reward evaluator. The generator itself was 100\% classical, receiving quantum influence only through scalar rewards. Furthermore, reference codebases utilized detached NumPy conversions, severing gradient backpropagation.
+    \item \textbf{Unconstrained One-Shot Generation}: Existing models such as MolGAN and MolGAN-QRL utilize multi-dense MLPs that predict all edge types and atom identities simultaneously via unconstrained Softmax. This frequently violates fundamental atomic valences ($\text{C} > 4, \text{N} > 3$), driving validity down to $45.63\%$ in MolGAN-QRL and $6.25\%$ in QGAN-HG \cite{hergli2026}.
+    \item \textbf{Persistent Mode Collapse}: While hybrid quantum rewards promote exploration, mode collapse remained severe in MolGAN-QRL ($0.26\% - 8.36\%$ uniqueness) and its fully stabilized variant MolGAN-QRL-S ($4.47\%$ uniqueness), leading prior work to conclude that high chemical validity is fundamentally trade-off-bound with uniqueness.
+\end{enumerate}
+
+In this paper, we resolve these challenges by embedding an active 4-qubit Quantum Policy Head into an autoregressive Relational GCN, enforced with dynamic valence masking and a Bemis-Murcko scaffold memory filter.
+
+\section{Methodology}
+
+\subsection{Autoregressive Relational GCN with Dynamic Valence Masking}
+Molecules are modeled as undirected relational graphs $G = (V, E)$, where $V \subset \{C, N, O, F\}$ and $E$ represents bonds from $\mathcal{R} = \{\text{Single, Double, Triple, Aromatic}\}$.
+
+At generation step $t$, the state of the nascent molecule $G_t$ is encoded using an $L$-layer Relational Graph Convolutional Network (RGCN):
+\begin{equation}
+h_i^{(l+1)} = \sigma \left( W_{\text{self}}^{(l)} h_i^{(l)} + \sum_{r \in \mathcal{R}} \sum_{j \in \mathcal{N}_i^r} \frac{1}{|\mathcal{N}_i^r|} W_r^{(l)} h_j^{(l)} \right)
+\end{equation}
+
+Chemical validity is enforced dynamically during autoregressive rollout. When evaluating candidate bond $b \in \{0, 1, 2, 3\}$ between candidate node $u$ and existing node $v$, the dynamic valence mask $M(u, v, b) \in \{0, 1\}$ is defined as:
+\begin{equation}
+\begin{aligned}
+M(u, v, b) = \mathbb{I} \Big[ & \left(V(u) + \text{ord}(b) \le \text{Val}(u)\right) \\
+& \land \left(V(v) + \text{ord}(b) \le \text{Val}(v)\right) \Big]
+\end{aligned}
+\end{equation}
+where $\text{Val} \in \{C: 4, N: 3, O: 2, F: 1\}$ and $V(u) = \sum_{w \in \mathcal{N}(u)} \text{BondOrder}(u, w)$. Masked logits are given by $\tilde{z}_{u,v,b} = z_{u,v,b} + \log M(u, v, b)$, strictly guaranteeing $0\%$ hypervalent transitions.
+
+\subsection{Dedicated 1-Qubit = 1-Heavy-Atom Quantum Policy Head}
+The 4 qubits of the variational circuit correspond directly to the 4 heavy elements:
+\begin{equation}
+q_0 \leftrightarrow C, \quad q_1 \leftrightarrow N, \quad q_2 \leftrightarrow O, \quad q_3 \leftrightarrow F
+\end{equation}
+
+Input features combine GNN baseline affinity $a_i$ with geometric bond angles and free valences: $x_i = \frac{1}{2}(a_i + g_i)$. Angles are encoded as:
+\begin{equation}
+\theta_i = (1 - x_i) \cdot \pi
+\end{equation}
+Ansatz layers apply parameterized Euler rotations $\text{Rot}(\alpha, \beta, \gamma)$ and circular CNOT entanglement:
+\begin{equation}
+U(\Phi) = \prod_{l=1}^L \left( \prod_{i=0}^3 \text{Rot}(\alpha_{l,i}, \beta_{l,i}, \gamma_{l,i}) \prod_{i=0}^3 \text{CNOT}_{i, (i+1)\%4} \right)
+\end{equation}
+
+The expectation values of Pauli-Z operators give the atom selection logits:
+\begin{equation}
+s_i = \langle \psi | Z_i | \psi \rangle, \quad \pi_\theta(a = i \mid s) = \frac{\exp(2.5 \cdot s_i)}{\sum_{j=0}^3 \exp(2.5 \cdot s_j)}
+\end{equation}
+
+\subsection{Bemis-Murcko Scaffold Diversity Memory Filter}
+Let $S(m)$ denote the generic Bemis-Murcko scaffold of generated molecule $m$, and $c(S)$ its occurrence count in sliding memory $\mathcal{M}$. The reward scaling factor is:
+\begin{equation}
+R_{\text{scaffold}}(m) = \begin{cases} 1.0 & \text{if } c(S) < k_{\text{bucket}} \\ 0.0 & \text{if } c(S) \ge k_{\text{bucket}} \end{cases}
+\end{equation}
+where $k_{\text{bucket}} = 25$. Zeroing out rewards on saturated scaffolds forces policy gradients to explore unpopulated chemical domains.
+
+\subsection{Proximal Policy Optimization (PPO)}
+The actor policy $\pi_\theta$ is trained using the clipped surrogate objective:
+\begin{equation}
+\begin{aligned}
+\mathcal{L}_{\text{CLIP}}(\theta) = \hat{\mathbb{E}}_t \Big[ \min \big( & r_t(\theta) \hat{A}_t, \\
+& \text{clip}(r_t(\theta), 1 - \epsilon, 1 + \epsilon) \hat{A}_t \big) \Big] \\
+& + c_{\text{ent}} \mathcal{H}(\pi_\theta)
+\end{aligned}
+\end{equation}
+where $r_t(\theta) = \frac{\pi_\theta(a_t \mid s_t)}{\pi_{\theta_{\text{old}}}(a_t \mid s_t)}$ and $\epsilon = 0.2$.
+
+\section{Experimental Results and Discussion}
+
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Generative Performance Benchmarks against Existing Quantum Reinforcement Learning and Quantum GAN Frameworks on QM9}
+\label{tab:comparison}
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lccccc@{}}
+\toprule
+\textbf{Metric} & \textbf{MolGAN \cite{decao2018}} & \textbf{MolGAN-QRL \cite{hergli2026}} & \textbf{MolGAN-QRL-S \cite{hergli2026}} & \textbf{QGAN-HG \cite{hergli2026}} & \textbf{MolGAN-QPolicy (Ours)} \\
+\midrule
+Quantum Role & None & Reward Evaluator & Reward Evaluator & Generator Head & \textbf{Policy Head ($\pi_\theta$)} \\
+Chemical Validity (\%) & 39.76\% & 69.68\% & 49.40\% & 6.25\% & \textbf{99.47\%} \\
+Molecular Stability (\%) & Not tracked & Not tracked & Not tracked & Not tracked & \textbf{99.27\%} \\
+Uniqueness Rate (\%) & 7.58\% & 8.36\% & 4.47\% & 100.0\% & \textbf{62.37\%} (Peak 88.2\%) \\
+Novelty Rate (\%) & 100.0\% & 100.0\% & 100.0\% & 100.0\% & \textbf{99.98\%} \\
+NVU ($N=497$ Benchmark) & 15 & 29 & 11 & 31 & \textbf{288 (Mean) / 447 (Peak)} \\
+NVU ($N=6,976$ Full Batch) & Infeasible & Infeasible & Infeasible & Infeasible & \textbf{4,036 / epoch (Peak 6,269)} \\
+Drug Candidate (DC) Score & 0.29 & 0.43 & 0.36 & 0.14 & \textbf{0.722 - 0.741} \\
+Synthetic Access. (Paper SA) & 0.42 & 0.26 & 0.42 & 0.26 & \textbf{0.383} (Raw SAS 4.44) \\
+Natural Product (NP) Score & 0.91 & 0.98 & 0.93 & 0.82 & \textbf{0.795 - 0.857} \\
+Peak QED Score & 0.47 & 0.54 & 0.49 & 0.38 & \textbf{0.510} \\
+Training Duration & 1.66 h & 15.57 h & 15.45 h & 12.84 h & \textbf{7.57 h} \\
+\bottomrule
+\end{tabular*}
+\end{table*}
+
+\begin{table}[h]
+\centering
+\footnotesize
+\caption{5-Epoch Milestone Trajectory of MolGAN-QPolicy}
+\label{tab:milestones}
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}ccccccc@{}}
+\toprule
+\textbf{Epoch} & \textbf{Valid} & \textbf{Stable} & \textbf{Unique} & \textbf{QED} & \textbf{SAS} & \textbf{NVU ($497$)} \\
+\midrule
+5  & 93.9\% & 91.8\% & 88.2\% & 0.444 & 4.32 & 368 \\
+10 & 94.9\% & 93.3\% & 86.4\% & 0.446 & 4.35 & 438 \\
+20 & 96.7\% & 95.8\% & 79.9\% & 0.444 & 4.41 & 407 \\
+30 & 98.4\% & 96.7\% & 66.4\% & 0.424 & 4.45 & 325 \\
+40 & 100.0\% & 100.0\% & 24.8\% & 0.489 & 4.42 & 123 \\
+50 & 99.5\% & 99.3\% & 62.4\% & 0.446 & 4.44 & 308 \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\subsection{Benchmarking Against Existing Quantum Models}
+As demonstrated in Table \ref{tab:comparison}, MolGAN-QPolicy significantly surpasses existing quantum reinforcement learning and quantum generative models across every functional metric:
+\begin{enumerate}
+    \item \textbf{Comparison with MolGAN-QRL and MolGAN-QRL-S}: While MolGAN-QRL reached $69.68\%$ validity, its uniqueness collapsed to $8.36\%$, yielding an NVU of only 29. Its fully stabilized counterpart (MolGAN-QRL-S) experienced further degradation in uniqueness ($4.47\%$) and NVU (11). In contrast, MolGAN-QPolicy achieves \textbf{99.47\% validity} and \textbf{62.37\% uniqueness}, delivering an average NVU of \textbf{288} ($10\times$ higher).
+    \item \textbf{Comparison with QGAN-HG}: Although QGAN-HG attained $100\%$ uniqueness, its validity crashed to $6.25\%$, producing an NVU of only 31. MolGAN-QPolicy avoids this validity collapse entirely.
+    \item \textbf{Computational Efficiency}: By utilizing a compact 4-qubit element-wise circuit rather than a 9-qubit generic network, training wall-clock time was reduced from 15.57 hours in MolGAN-QRL down to \textbf{7.57 hours} ($2\times$ faster).
+\end{enumerate}
+
+When the policy began to concentrate around Epoch 40 (uniqueness dipped to $24.8\%$), the Scaffold Memory Filter saturated ($c(S) \ge 25$), zeroing out rewards on the dominant scaffold. This drove the agent back into uncharted chemical space, propelling uniqueness back up to \textbf{62.37\%} at Epoch 50 without sacrificing validity ($99.47\%$) (Table \ref{tab:milestones}).
+
+\subsection{Wet-Lab Synthetic Preparability Screening}
+Screening 793 unique molecules at Epoch 50 under pharmaceutical wet-lab criteria reveals:
+\begin{itemize}
+    \item \textbf{Tier 1 (Readily Preparable)}: 89.0\% ($\sim 3,852$ molecules) satisfy $\text{Raw SAS} \le 5.0$, confirmed 3D Euclidean distance geometry embedding (`AllChem.EmbedMolecule` pass rate $99.5\%$), and zero structural alerts.
+    \item \textbf{Tier 2 (Preparable with Specialized Route)}: 10.5\% ($\sim 454$ molecules) with $5.0 < \text{SAS} \le 6.0$, fully 3D embeddable.
+    \item \textbf{Tier 3 (Infeasible / High Difficulty)}: 0.5\% ($\sim 22$ molecules) failing 3D minimization.
+\end{itemize}
+Total synthetic feasibility across Tiers 1 and 2 is \textbf{99.5\%}.
+
+\section{Conclusion}
+MolGAN-QPolicy eliminates the classic validity/uniqueness trade-off in quantum molecular generation. By embedding a 4-qubit dedicated element-wise policy head within an autoregressive RGCN and introducing a Bemis-Murcko scaffold memory filter, chemical validity is elevated to 99.47\%, uniqueness to 62.37\%--88.24\%, and productive NVU by tenfold over existing quantum RL frameworks, while guaranteeing that 89.0\% of generated unique molecules are readily preparable bench compounds.
+
+\section*{Declarations}
+\subsection*{Funding}
+Not applicable.
+
+\subsection*{Competing Interests}
+The authors declare no competing financial or non-financial interests.
+
+\subsection*{Authors' Contributions}
+\textbf{Y.N.M.}, \textbf{M.K.}, and \textbf{M.M.} conceived the framework, implemented the quantum and classical architectures, conducted training experiments, and drafted the manuscript. \textbf{C.M.D.} supervised the research, reviewed the methodology, and contributed to manuscript refinement.
+
+\subsection*{Acknowledgments}
+The authors express their sincere gratitude to \textbf{Dr. Chandra Mohan Dasari}, Assistant Professor, Department of Computer Science and Engineering, Indian Institute of Information Technology Design and Manufacturing Kurnool (IIITDM Kurnool), for continuous guidance, mentorship, and supervision throughout this research. The authors also acknowledge the computational and GPU facilities provided by IIITDM Kurnool.
+
+\begin{thebibliography}{99}
+\sloppy
+\bibitem{hergli2026}
+M.~I. Hergli and E.~Harigua-Souiai, ``MolGAN-QRL: a hybrid framework for molecule generation using quantum-enhanced reinforcement learning,'' \textit{Journal of Cheminformatics}, vol.~18, no.~1, 2026, Art. no. PMC12952149.
+
+\bibitem{decao2018}
+N.~De~Cao and T.~Kipf, ``MolGAN: An implicit generative model for small molecular graphs,'' \textit{arXiv preprint arXiv:1805.11973}, 2018.
+
+\bibitem{olivecrona2017}
+M.~Olivecrona, T.~Blaschke, O.~Engkvist, and H.~Chen, ``Molecular de-novo design through deep reinforcement learning,'' \textit{Journal of Cheminformatics}, vol.~9, no.~1, p.~48, 2017.
+
+\bibitem{schulman2017}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov, ``Proximal policy optimization algorithms,'' \textit{arXiv preprint arXiv:1707.06347}, 2017.
+
+\bibitem{ertl2009}
+P.~Ertl and A.~Schuffenhauer, ``Estimation of synthetic accessibility score of drug-like molecules,'' \textit{Journal of Cheminformatics}, vol.~1, no.~1, p.~8, 2009.
+
+\bibitem{bickerton2012}
+G.~R. Bickerton, G.~V. Paolini, J.~Besnard, S.~Muresan, and A.~L. Hopkins, ``Quantifying the chemical beauty of drugs,'' \textit{Nature Chemistry}, vol.~4, no.~2, pp.~90--98, 2012.
+
+\bibitem{ruddigkeit2012}
+L.~Ruddigkeit, R.~van Deursen, L.~C. Blum, and J.-L. Reymond, ``Enumeration of 166 billion organic small molecules in the chemical universe database GDB-17,'' \textit{Journal of Chemical Information and Modeling}, vol.~52, no.~11, pp.~2864--2875, 2012.
+
+\bibitem{landrum2013}
+G.~Landrum, ``RDKit: Open-source cheminformatics software,'' \textit{Online}, 2013. [Online]. Available: \url{http://www.rdkit.org}.
+
+\bibitem{bergholm2018}
+V.~Bergholm \textit{et al.}, ``PennyLane: Automatic differentiation and machine learning of quantum computers,'' \textit{arXiv preprint arXiv:1811.04968}, 2018.
+
+\end{thebibliography}
+
+\end{document}

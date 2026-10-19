@@ -1,0 +1,50 @@
+# Python cache & compiled files
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter notebooks & IDE
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# OS-specific junk & Windows metadata
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Large experimental results and legacy models
+Results/
+scratch/
+make_pdf.py
+molecular_report.pdf
+molecules_catalog.pdf
+molgan/
+molgan_finished_old/
+molgan_qrl/
+molgan_qrl_finished
+molgan_qrl_finished_old
+molgan_qrl_heavy_atoms/
+molgan_qrl_ppo/
+qrl_with_sterochemistry/
+
+# Heavy datasets (>100MB GitHub limit) & large uncompressed files
+*.sdf
+*.csv
+data/gdb9.sdf
+data/gdb9.sdf.csv
+data/qm9_smiles.sparsedataset
+data/qm9_sample.sparsedataset
+data/data/
+
+# Allow essential scoring models and compressed dataset
+!data/SA_score.pkl.gz
+!data/NP_score.pkl.gz
+!data/qm9_with_negatives.sparsedataset
+!data/qm9.smi
+!data/sparse_molecular_dataset.py
+!data/download_dataset.sh
+
+# Manuscript files: keep PDF and TeX
+!paper_manuscript/overleaf_qpolicy_paper.pdf
+!paper_manuscript/overleaf_qpolicy_paper.tex
