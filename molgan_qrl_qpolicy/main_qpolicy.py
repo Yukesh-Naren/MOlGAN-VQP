@@ -50,6 +50,16 @@ def parse_args():
                         choices=['quantum', 'classical', 'mlp'],
                         help='Policy architecture for bond formation')
 
+    # Masking and filtering controls
+    parser.add_argument('--no_valence_mask', action='store_true', default=False,
+                        help='Disable physical valence masking on bond selection')
+    parser.add_argument('--no_filter', action='store_true', default=False,
+                        help='Disable scaffold memory and chemical alert filters in reward')
+    parser.add_argument('--no_connectivity_enforce', action='store_true', default=False,
+                        help='Disable post-hoc connectivity enforcement fallback')
+    parser.add_argument('--no_atom_filters', action='store_true', default=False,
+                        help='Disable step 0 Carbon anchor and heteroatom cap filters')
+
     # Device
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Computation device (cuda or cpu)')
@@ -85,6 +95,10 @@ def main():
         lr_disc=args.lr_disc,
         atom_policy_type=args.atom_policy,
         edge_policy_type=args.edge_policy,
+        use_valence_mask=not args.no_valence_mask,
+        use_filter=not args.no_filter,
+        enforce_connectivity=not args.no_connectivity_enforce,
+        use_atom_filters=not args.no_atom_filters,
         device=args.device
     )
 

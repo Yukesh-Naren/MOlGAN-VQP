@@ -96,11 +96,19 @@ class SolverQPolicy:
                  lr_disc=1e-4,
                  atom_policy_type='dedicated_quantum',
                  edge_policy_type='quantum',
+                 use_valence_mask=True,
+                 use_filter=True,
+                 enforce_connectivity=True,
+                 use_atom_filters=True,
                  device=None):
 
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.atom_policy_type = atom_policy_type
         self.edge_policy_type = edge_policy_type
+        self.use_valence_mask = use_valence_mask
+        self.use_filter = use_filter
+        self.enforce_connectivity = enforce_connectivity
+        self.use_atom_filters = use_atom_filters
         self.batch_size = batch_size
         self.epochs = epochs
         self.ppo_epochs = ppo_epochs
@@ -144,17 +152,21 @@ class SolverQPolicy:
             beta=beta,
             gamma=gamma,
             prop_metric=prop_metric,
-            scaffold_bucket_size=scaffold_bucket_size
+            scaffold_bucket_size=scaffold_bucket_size,
+            use_filter=self.use_filter
         ).to(self.device)
 
         # 3. Networks: Actor with Q-Policy Head (Atom + Edge), Critic, Discriminator
-        self.logger.info(f"Initializing Actor (Atom: {self.atom_policy_type}, Edge: {self.edge_policy_type}), Critic, Discriminator...")
+        self.logger.info(f"Initializing Actor (Atom: {self.atom_policy_type}, Edge: {self.edge_policy_type}, Masking: {self.use_valence_mask}, Filters: {self.use_filter}), Critic, Discriminator...")
         self.actor = ActorRGCN_Quantum(
             max_atoms=9,
             num_atom_types=4,
             num_edge_types=5,
             atom_policy_type=self.atom_policy_type,
-            edge_policy_type=self.edge_policy_type
+            edge_policy_type=self.edge_policy_type,
+            use_valence_mask=self.use_valence_mask,
+            enforce_connectivity=self.enforce_connectivity,
+            use_atom_filters=self.use_atom_filters
         ).to(self.device)
         self.critic = CriticRGCN(node_dim=5, edge_types=5).to(self.device)
         self.discriminator = DiscriminatorRGCN(node_dim=5, edge_types=5).to(self.device)

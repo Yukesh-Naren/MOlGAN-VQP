@@ -43,7 +43,8 @@ class ActorRGCN_Quantum(nn.Module):
     """
     def __init__(self, max_atoms=9, num_atom_types=4, num_edge_types=5,
                  node_dim=5, hidden_dims=[128, 64], dropout_rate=0.0,
-                 atom_policy_type='dedicated_quantum', edge_policy_type='quantum'):
+                 atom_policy_type='dedicated_quantum', edge_policy_type='quantum',
+                 use_valence_mask=True, enforce_connectivity=True, use_atom_filters=True):
         super(ActorRGCN_Quantum, self).__init__()
         self.max_atoms = max_atoms
         self.num_atom_types = num_atom_types
@@ -51,6 +52,9 @@ class ActorRGCN_Quantum(nn.Module):
         self.node_dim = node_dim
         self.atom_policy_type = str(atom_policy_type).lower()
         self.edge_policy_type = str(edge_policy_type).lower()
+        self.use_valence_mask = use_valence_mask
+        self.enforce_connectivity = enforce_connectivity
+        self.use_atom_filters = use_atom_filters
 
         # Relational GCN encoder
         self.encoder = RelationalGCN(
@@ -253,14 +257,15 @@ class ActorRGCN_Quantum(nn.Module):
             # 3. Atom Policy execution (Quantum or Classical)
             q_logits = self.forward_atom(graph_emb, bond_angles, free_val, neighbor_types)
 
-            # Enforce Carbon anchor on Step 0 and cap heteroatoms at 4
-            if step == 0:
-                q_logits[:, 1:] = -1e9
-            else:
-                num_hetero = (node_indices[:, :step] > 1).sum(dim=-1)
-                for b in range(batch_size):
-                    if num_hetero[b] >= 4:
-                        q_logits[b, 1:] = -1e9
+            # Enforce Carbon anchor on Step 0 and cap heteroatoms at 4 (if atom filters enabled)
+            if self.use_atom_filters:
+                if step == 0:
+                    q_logits[:, 1:] = -1e9
+                else:
+                    num_hetero = (node_indices[:, :step] > 1).sum(dim=-1)
+                    for b in range(batch_size):
+                        if num_hetero[b] >= 4:
+                            q_logits[b, 1:] = -1e9
 
             node_dist = Categorical(logits=q_logits / max(temperature, 1e-4))
             node_action = node_dist.sample()         # in {0, 1, 2, 3}
@@ -301,9 +306,12 @@ class ActorRGCN_Quantum(nn.Module):
 
                     edge_logits = self.forward_edge(pair_feat)
 
-                    # Valence and Aromatic Masking
-                    valence_mask = self.compute_valence_mask(node_indices, adj_indices, u, v)
-                    edge_logits = torch.where(valence_mask, edge_logits, torch.tensor(-1e9, device=device))
+                    # Valence and Aromatic Masking (if enabled)
+                    if self.use_valence_mask:
+                        valence_mask = self.compute_valence_mask(node_indices, adj_indices, u, v)
+                        edge_logits = torch.where(valence_mask, edge_logits, torch.tensor(-1e9, device=device))
+                    else:
+                        valence_mask = None
 
                     edge_dist = Categorical(logits=edge_logits / max(temperature, 1e-4))
                     edge_action = edge_dist.sample()
@@ -314,7 +322,7 @@ class ActorRGCN_Quantum(nn.Module):
                         'v': v,
                         'edge_action': edge_action,
                         'edge_log_prob': edge_log_prob,
-                        'valence_mask': valence_mask.clone()
+                        'valence_mask': valence_mask.clone() if valence_mask is not None else None
                     })
 
                     for b in range(batch_size):
@@ -326,33 +334,34 @@ class ActorRGCN_Quantum(nn.Module):
                         adj_tensor[b, u, v, b_type] = 1.0
                         adj_tensor[b, v, u, b_type] = 1.0
 
-                # Ensure node u is connected to at least one prior node to maintain connectivity
-                for b in range(batch_size):
-                    if adj_indices[b, u, :u].sum() == 0:
-                        u_t = int(node_indices[b, u].item())
-                        candidates = list(range(u))
-                        candidates.sort(key=lambda c: 0 if int(node_indices[b, c].item()) == 1 else 1)
-                        for v_cand in candidates:
-                            v_type = int(node_indices[b, v_cand].item())
-                            if u_t == 3 and v_type == 3:
-                                continue
-                            if (u_t == 4 and v_type != 1) or (v_type == 4 and u_t != 1):
-                                continue
-                            if u_t == 2 and v_type == 2:
-                                u_has_n = any(node_indices[b, w].item() == 2 and adj_indices[b, u, w].item() > 0 for w in range(step) if w != u and w != v_cand)
-                                v_has_n = any(node_indices[b, w].item() == 2 and adj_indices[b, v_cand, w].item() > 0 for w in range(step) if w != u and w != v_cand)
-                                if u_has_n or v_has_n:
+                # Ensure node u is connected to at least one prior node to maintain connectivity (if enabled)
+                if self.enforce_connectivity:
+                    for b in range(batch_size):
+                        if adj_indices[b, u, :u].sum() == 0:
+                            u_t = int(node_indices[b, u].item())
+                            candidates = list(range(u))
+                            candidates.sort(key=lambda c: 0 if int(node_indices[b, c].item()) == 1 else 1)
+                            for v_cand in candidates:
+                                v_type = int(node_indices[b, v_cand].item())
+                                if u_t == 3 and v_type == 3:
                                     continue
-                            curr_val_u = sum(BOND_ORDERS[adj_indices[b, u, w].item()] for w in range(step))
-                            curr_val_v = sum(BOND_ORDERS[adj_indices[b, v_cand, w].item()] for w in range(step))
-                            if (curr_val_u + 1.0 <= MAX_VALENCES[u_t]) and (curr_val_v + 1.0 <= MAX_VALENCES[v_type]):
-                                adj_indices[b, u, v_cand] = 1
-                                adj_indices[b, v_cand, u] = 1
-                                adj_tensor[b, u, v_cand, :] = 0.0
-                                adj_tensor[b, v_cand, u, :] = 0.0
-                                adj_tensor[b, u, v_cand, 1] = 1.0
-                                adj_tensor[b, v_cand, u, 1] = 1.0
-                                break
+                                if (u_t == 4 and v_type != 1) or (v_type == 4 and u_t != 1):
+                                    continue
+                                if u_t == 2 and v_type == 2:
+                                    u_has_n = any(node_indices[b, w].item() == 2 and adj_indices[b, u, w].item() > 0 for w in range(step) if w != u and w != v_cand)
+                                    v_has_n = any(node_indices[b, w].item() == 2 and adj_indices[b, v_cand, w].item() > 0 for w in range(step) if w != u and w != v_cand)
+                                    if u_has_n or v_has_n:
+                                        continue
+                                curr_val_u = sum(BOND_ORDERS[adj_indices[b, u, w].item()] for w in range(step))
+                                curr_val_v = sum(BOND_ORDERS[adj_indices[b, v_cand, w].item()] for w in range(step))
+                                if (curr_val_u + 1.0 <= MAX_VALENCES[u_t]) and (curr_val_v + 1.0 <= MAX_VALENCES[v_type]):
+                                    adj_indices[b, u, v_cand] = 1
+                                    adj_indices[b, v_cand, u] = 1
+                                    adj_tensor[b, u, v_cand, :] = 0.0
+                                    adj_tensor[b, v_cand, u, :] = 0.0
+                                    adj_tensor[b, u, v_cand, 1] = 1.0
+                                    adj_tensor[b, v_cand, u, 1] = 1.0
+                                    break
 
             trajectories.append(step_record)
 
@@ -376,14 +385,15 @@ class ActorRGCN_Quantum(nn.Module):
             _, graph_emb = self.forward_subgraph(node_feat, adj_t, mask)
             q_logits = self.forward_atom(graph_emb, bond_ang, free_v, neigh_t)
 
-            if step == 0:
-                q_logits[:, 1:] = -1e9
-            else:
-                atom_indices = node_feat[:, :step, 1:].argmax(dim=-1) + 1
-                num_hetero = (atom_indices > 1).sum(dim=-1)
-                for b in range(q_logits.size(0)):
-                    if num_hetero[b] >= 4:
-                        q_logits[b, 1:] = -1e9
+            if self.use_atom_filters:
+                if step == 0:
+                    q_logits[:, 1:] = -1e9
+                else:
+                    atom_indices = node_feat[:, :step, 1:].argmax(dim=-1) + 1
+                    num_hetero = (atom_indices > 1).sum(dim=-1)
+                    for b in range(q_logits.size(0)):
+                        if num_hetero[b] >= 4:
+                            q_logits[b, 1:] = -1e9
 
             node_dist = Categorical(logits=q_logits / max(temperature, 1e-4))
             total_log_probs = total_log_probs + node_dist.log_prob(node_act)
@@ -398,7 +408,8 @@ class ActorRGCN_Quantum(nn.Module):
                 pair_feat = torch.cat([node_emb[:, u, :], node_emb[:, v, :], g_emb], dim=-1)
                 edge_logits = self.forward_edge(pair_feat)
 
-                edge_logits = torch.where(val_mask, edge_logits, torch.tensor(-1e9, device=edge_logits.device))
+                if self.use_valence_mask and val_mask is not None:
+                    edge_logits = torch.where(val_mask, edge_logits, torch.tensor(-1e9, device=edge_logits.device))
                 edge_dist = Categorical(logits=edge_logits / max(temperature, 1e-4))
                 log_p = edge_dist.log_prob(edge_act)
                 total_log_probs = total_log_probs + log_p

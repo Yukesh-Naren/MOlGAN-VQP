@@ -324,13 +324,14 @@ class CompositeRewardCalculator(nn.Module):
       6. In-Batch Morgan fingerprint diversity multiplier
     """
     def __init__(self, quantum_evaluator=None, alpha=0.4, beta=0.3, gamma=0.3,
-                 prop_metric='qed', scaffold_bucket_size=25):
+                 prop_metric='qed', scaffold_bucket_size=25, use_filter=True):
         super(CompositeRewardCalculator, self).__init__()
         self.quantum_evaluator = quantum_evaluator
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         self.prop_metric = prop_metric.lower()
+        self.use_filter = use_filter
 
         # REINVENT Scaffold Memory Filter to eliminate mode collapse
         self.scaffold_filter = ScaffoldMemoryFilter(bucket_size=scaffold_bucket_size, penalty=0.0)
@@ -385,6 +386,18 @@ class CompositeRewardCalculator(nn.Module):
             if mol is None:
                 rewards.append(-0.5)  # Invalid graph penalty
                 stable_flags.append(0.0)
+                continue
+
+            # When filters are disabled, reward pure generation based on quantum + D + prop
+            if not self.use_filter:
+                stable_flags.append(1.0)
+                r_pos = (
+                    0.05 +
+                    self.alpha * r_quantum[i].item() +
+                    self.beta * prob_real[i].item() +
+                    self.gamma * r_prop[i].item()
+                )
+                rewards.append(min(1.0, max(0.0, r_pos)))
                 continue
 
             n_heavy = mol.GetNumHeavyAtoms()
