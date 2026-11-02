@@ -287,6 +287,13 @@ class SolverQPolicy:
             total_loss_v += loss_v.item()
             self.buffer.clear()
 
+            if (step + 1) % 10 == 0 or step == len(self.dataloader) - 1:
+                self.logger.info(
+                    f"  [Epoch {epoch:02d} | Step {step+1:04d}/{len(self.dataloader)}] "
+                    f"Loss_D: {loss_d.item():.4f} | Loss_Pi: {loss_pi.item():.4f} | "
+                    f"Loss_V: {loss_v.item():.4f} | Batch_R: {rewards.mean().item():.4f}"
+                )
+
         n_steps = len(self.dataloader)
         avg_loss_d = total_loss_d / n_steps
         avg_loss_pi = total_loss_pi / n_steps
