@@ -6,7 +6,13 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from molgan_qrl_qpolicy.layers import RelationalGCN
-from molgan_qrl_qpolicy.quantum_policy import DedicatedAtomQuantumPolicy
+from molgan_qrl_qpolicy.quantum_policy import (
+    DedicatedAtomQuantumPolicy,
+    QuantumAtomPolicy2Q,
+    ClassicalAtomCircuit2Q,
+    QuantumEdgePolicy3Q,
+    ClassicalEdgeCircuit3Q
+)
 
 # Atomic limits and valence rules
 MAX_VALENCES = {
@@ -30,15 +36,21 @@ BOND_ORDERS = {
 
 class ActorRGCN_Quantum(nn.Module):
     """
-    Autoregressive Graph Convolutional Actor with Dedicated 1-Qubit = 1-Atom Policy Head.
+    Autoregressive Graph Convolutional Actor with Variational Quantum Policies:
+      - Atom Selection: Dedicated 1-Qubit=1-Atom (4Q) or 2-Qubit Born-Rule (2Q)
+      - Bond Formation: 3-Qubit Born-Rule Quantum Edge Policy (3Q)
+    Includes exact size-matched classical counterparts for head-to-head comparison.
     """
     def __init__(self, max_atoms=9, num_atom_types=4, num_edge_types=5,
-                 node_dim=5, hidden_dims=[128, 64], dropout_rate=0.0):
+                 node_dim=5, hidden_dims=[128, 64], dropout_rate=0.0,
+                 atom_policy_type='dedicated_quantum', edge_policy_type='quantum'):
         super(ActorRGCN_Quantum, self).__init__()
         self.max_atoms = max_atoms
         self.num_atom_types = num_atom_types
         self.num_edge_types = num_edge_types
         self.node_dim = node_dim
+        self.atom_policy_type = str(atom_policy_type).lower()
+        self.edge_policy_type = str(edge_policy_type).lower()
 
         # Relational GCN encoder
         self.encoder = RelationalGCN(
@@ -48,21 +60,103 @@ class ActorRGCN_Quantum(nn.Module):
             dropout_rate=dropout_rate
         )
 
-        # Dedicated 1-Qubit = 1-Atom Quantum Policy Head (Q-Actor)
-        self.quantum_policy = DedicatedAtomQuantumPolicy(
-            in_features=self.encoder.out_dim,
-            n_qubits=4,
-            n_layers=3
-        )
+        # =========================================================================
+        # 1. ATOM SELECTION POLICY HEAD (QUANTUM vs CLASSICAL)
+        # -------------------------------------------------------------------------
+        # Quantum (Dedicated 4-Qubit): 1 qubit per heavy atom [C, N, O, F]
+        # Classical Counterpart (in comments for model comparison):
+        #   self.quantum_policy = ClassicalAtomCircuit2Q(
+        #       in_features=self.encoder.out_dim, hidden_dim=4, num_classes=num_atom_types
+        #   )  # 32 parameters (matches 18 Euler angles + 1 scale = 19 quantum params)
+        # =========================================================================
+        if self.atom_policy_type in ['dedicated', 'dedicated_quantum', '4q']:
+            self.quantum_policy = DedicatedAtomQuantumPolicy(
+                in_features=self.encoder.out_dim,
+                n_qubits=4,
+                n_layers=3
+            )
+        elif self.atom_policy_type in ['quantum_2q', '2q']:
+            self.quantum_policy = QuantumAtomPolicy2Q(
+                in_features=self.encoder.out_dim,
+                n_layers=3,
+                output_scale=3.0,
+                learnable_scale=True
+            )
+        elif self.atom_policy_type in ['classical', 'classical_2q']:
+            self.quantum_policy = ClassicalAtomCircuit2Q(
+                in_features=self.encoder.out_dim,
+                hidden_dim=4,
+                num_classes=num_atom_types
+            )
+        else:
+            raise ValueError(f"Unknown atom_policy_type: {atom_policy_type}")
 
-        # Edge formation head: Takes pair embeddings [h_u, h_v, h_G] -> 5 bond types
+        # =========================================================================
+        # 2. BOND FORMATION POLICY HEAD (QUANTUM vs CLASSICAL)
+        # -------------------------------------------------------------------------
+        # Quantum Edge Policy (3-Qubit VQC):
+        #   - 3 qubits span 2^3 = 8 computational basis states.
+        #   - Normalized slice |000>..|100> maps to 5 QM9 bond types:
+        #     [None, Single, Double, Triple, Aromatic]
+        #   - Trainable parameters: 27 Euler angles + 1 learned temperature scale gamma = 28 params.
+        #
+        # Classical Size-Matched Counterpart (in comments for model comparison):
+        #   self.edge_policy = ClassicalEdgeCircuit3Q(
+        #       in_features=pair_in_dim, hidden_dim=8, num_classes=num_edge_types
+        #   )  # 77 parameters (matches 27 Euler angles + 1 scale = 28 quantum params)
+        #
+        # Classical Unchoked MLP Counterpart (in comments):
+        #   self.edge_policy = nn.Sequential(
+        #       nn.Linear(pair_in_dim, 128),
+        #       nn.LeakyReLU(0.2),
+        #       nn.Dropout(dropout_rate),
+        #       nn.Linear(128, num_edge_types)
+        #   )  # 25,221 parameters
+        # =========================================================================
         pair_in_dim = self.encoder.out_dim * 3
-        self.edge_head = nn.Sequential(
-            nn.Linear(pair_in_dim, 128),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, num_edge_types)
-        )
+
+        if self.edge_policy_type in ['quantum', 'quantum_3q', 'vqc']:
+            self.edge_policy = QuantumEdgePolicy3Q(
+                in_features=pair_in_dim,
+                n_layers=3,
+                output_scale=3.0,
+                learnable_scale=True
+            )
+        elif self.edge_policy_type in ['classical', 'classical_3q', 'size_matched']:
+            self.edge_policy = ClassicalEdgeCircuit3Q(
+                in_features=pair_in_dim,
+                hidden_dim=8,
+                num_classes=num_edge_types
+            )
+        elif self.edge_policy_type in ['mlp', 'classical_mlp', 'direct']:
+            self.edge_policy = nn.Sequential(
+                nn.Linear(pair_in_dim, 128),
+                nn.LeakyReLU(0.2),
+                nn.Dropout(dropout_rate),
+                nn.Linear(128, num_edge_types)
+            )
+        else:
+            raise ValueError(f"Unknown edge_policy_type: {edge_policy_type}")
+
+        # Keep edge_head pointing to edge_policy for backwards compatibility
+        self.edge_head = self.edge_policy
+
+    def forward_atom(self, graph_emb, bond_angles=None, free_val=None, neighbor_types=None):
+        """Helper to invoke atom policy whether quantum or classical."""
+        if hasattr(self.quantum_policy, 'compute_atom_specific_compatibilities'):
+            out = self.quantum_policy(graph_emb, bond_angles, free_val, neighbor_types)
+        else:
+            out = self.quantum_policy(graph_emb)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
+
+    def forward_edge(self, pair_feat):
+        """Helper to invoke bond/edge policy whether quantum VQC or classical."""
+        out = self.edge_policy(pair_feat)
+        if isinstance(out, tuple):
+            return out[0]
+        return out
 
     def forward_subgraph(self, node_features, adj_tensor, active_mask):
         """Encodes active subgraph."""
@@ -156,8 +250,8 @@ class ActorRGCN_Quantum(nn.Module):
                 # Angle estimation: 109.5 deg default, 120 deg if double bond present
                 bond_angles = torch.full((batch_size,), 1.91, device=device)
 
-            # 3. Quantum Policy Head execution
-            q_logits, q_probs = self.quantum_policy(graph_emb, bond_angles, free_val, neighbor_types)
+            # 3. Atom Policy execution (Quantum or Classical)
+            q_logits = self.forward_atom(graph_emb, bond_angles, free_val, neighbor_types)
 
             # Enforce Carbon anchor on Step 0 and cap heteroatoms at 4
             if step == 0:
@@ -205,7 +299,7 @@ class ActorRGCN_Quantum(nn.Module):
                     h_v = node_emb[:, v, :]
                     pair_feat = torch.cat([h_u, h_v, graph_emb], dim=-1)
 
-                    edge_logits = self.edge_head(pair_feat)
+                    edge_logits = self.forward_edge(pair_feat)
 
                     # Valence and Aromatic Masking
                     valence_mask = self.compute_valence_mask(node_indices, adj_indices, u, v)
@@ -280,7 +374,7 @@ class ActorRGCN_Quantum(nn.Module):
             node_act = record['node_action']
 
             _, graph_emb = self.forward_subgraph(node_feat, adj_t, mask)
-            q_logits, _ = self.quantum_policy(graph_emb, bond_ang, free_v, neigh_t)
+            q_logits = self.forward_atom(graph_emb, bond_ang, free_v, neigh_t)
 
             if step == 0:
                 q_logits[:, 1:] = -1e9
@@ -302,7 +396,7 @@ class ActorRGCN_Quantum(nn.Module):
 
                 node_emb, g_emb = self.forward_subgraph(node_feat, adj_t, mask)
                 pair_feat = torch.cat([node_emb[:, u, :], node_emb[:, v, :], g_emb], dim=-1)
-                edge_logits = self.edge_head(pair_feat)
+                edge_logits = self.forward_edge(pair_feat)
 
                 edge_logits = torch.where(val_mask, edge_logits, torch.tensor(-1e9, device=edge_logits.device))
                 edge_dist = Categorical(logits=edge_logits / max(temperature, 1e-4))

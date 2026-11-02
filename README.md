@@ -32,10 +32,12 @@ Deep generative models for molecular graphs are transforming rational drug desig
 
 ### 🌟 Key Innovations
 1. **Physical 1-Qubit = 1-Atom Mapping**: Explicit one-to-one correspondence ($q_0 \leftrightarrow \text{C}, q_1 \leftrightarrow \text{N}, q_2 \leftrightarrow \text{O}, q_3 \leftrightarrow \text{F}$), injecting local valence, angles, and neighborhood chemistries into quantum state rotations.
-2. **PPO-Guided Closed-Loop Learning**: Quantum gradients propagate end-to-end to drive generator updates using clipped surrogate objectives without vanishing or detached gradients.
-3. **Bemis-Murcko Scaffold Diversity Memory Filter**: Dynamic memory buckets penalize repeated core ring scaffolds, completely eliminating mode collapse.
-4. **Dynamic Valence Masking**: Explicit physical valence checks prevent hypervalent and physically strained bond additions during graph assembly.
-5. **Rigorous Quantum Benchmarks**: Evaluated on the QM9 dataset, achieving an NVU (Number of Valid and Unique molecules) of **288 (mean) / 447 (peak)** compared to MolGAN-QRL's **29** and QGAN-HG's **31** ($10\times$ to $15\times$ improvement).
+2. **Quantum Bond Policy Circuit (3-Qubit VQC)**: 3-qubit variational circuit encoding pair embeddings into Born-rule computational basis probabilities over the 5 QM9 bond types (None, Single, Double, Triple, Aromatic).
+3. **PPO-Guided Closed-Loop Learning**: Quantum gradients propagate end-to-end to drive generator updates using clipped surrogate objectives without vanishing or detached gradients.
+4. **Bemis-Murcko Scaffold Diversity Memory Filter**: Dynamic memory buckets penalize repeated core ring scaffolds, completely eliminating mode collapse.
+5. **Dynamic Valence Masking**: Explicit physical valence checks prevent hypervalent and physically strained bond additions during graph assembly.
+6. **Head-to-Head Size-Matched Classical Controls**: Pre-registered size-matched classical architectures (32-parameter atom head, 77-parameter bond head) provided directly in the codebase for rigorous baseline comparisons.
+7. **Rigorous Quantum Benchmarks**: Evaluated on the QM9 dataset, achieving an NVU (Number of Valid and Unique molecules) of **288 (mean) / 447 (peak)** compared to MolGAN-QRL's **29** and QGAN-HG's **31** ($10\times$ to $15\times$ improvement).
 
 ---
 
@@ -108,6 +110,8 @@ Train the model on the preprocessed QM9 dataset:
 ```bash
 python molgan_qrl_qpolicy/main_qpolicy.py \
     --dataset_path data/qm9_with_negatives.sparsedataset \
+    --atom_policy dedicated_quantum \
+    --edge_policy quantum \
     --batch_size 16 \
     --epochs 50 \
     --ppo_epochs 4 \

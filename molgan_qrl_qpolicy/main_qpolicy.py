@@ -42,6 +42,14 @@ def parse_args():
     parser.add_argument('--lr_critic', type=float, default=1e-3, help='Learning rate for Value Critic')
     parser.add_argument('--lr_disc', type=float, default=1e-4, help='Learning rate for Discriminator')
 
+    # Policy heads (Quantum vs Classical)
+    parser.add_argument('--atom_policy', type=str, default='dedicated_quantum',
+                        choices=['dedicated_quantum', 'quantum_2q', 'classical_2q'],
+                        help='Policy architecture for heavy atom selection')
+    parser.add_argument('--edge_policy', type=str, default='quantum',
+                        choices=['quantum', 'classical', 'mlp'],
+                        help='Policy architecture for bond formation')
+
     # Device
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Computation device (cuda or cpu)')
@@ -75,6 +83,8 @@ def main():
         lr_actor=args.lr_actor,
         lr_critic=args.lr_critic,
         lr_disc=args.lr_disc,
+        atom_policy_type=args.atom_policy,
+        edge_policy_type=args.edge_policy,
         device=args.device
     )
 

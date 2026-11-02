@@ -94,9 +94,13 @@ class SolverQPolicy:
                  lr_actor=1e-4,
                  lr_critic=1e-3,
                  lr_disc=1e-4,
+                 atom_policy_type='dedicated_quantum',
+                 edge_policy_type='quantum',
                  device=None):
 
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.atom_policy_type = atom_policy_type
+        self.edge_policy_type = edge_policy_type
         self.batch_size = batch_size
         self.epochs = epochs
         self.ppo_epochs = ppo_epochs
@@ -143,9 +147,15 @@ class SolverQPolicy:
             scaffold_bucket_size=scaffold_bucket_size
         ).to(self.device)
 
-        # 3. Networks: Actor with Dedicated 1-Qubit = 1-Atom Policy, Critic, Discriminator
-        self.logger.info("Initializing Actor with 1-Qubit=1-Atom Q-Policy Head, Critic, and Discriminator...")
-        self.actor = ActorRGCN_Quantum(max_atoms=9, num_atom_types=4, num_edge_types=5).to(self.device)
+        # 3. Networks: Actor with Q-Policy Head (Atom + Edge), Critic, Discriminator
+        self.logger.info(f"Initializing Actor (Atom: {self.atom_policy_type}, Edge: {self.edge_policy_type}), Critic, Discriminator...")
+        self.actor = ActorRGCN_Quantum(
+            max_atoms=9,
+            num_atom_types=4,
+            num_edge_types=5,
+            atom_policy_type=self.atom_policy_type,
+            edge_policy_type=self.edge_policy_type
+        ).to(self.device)
         self.critic = CriticRGCN(node_dim=5, edge_types=5).to(self.device)
         self.discriminator = DiscriminatorRGCN(node_dim=5, edge_types=5).to(self.device)
 
