@@ -53,12 +53,22 @@ def parse_args():
     # Masking and filtering controls
     parser.add_argument('--no_valence_mask', action='store_true', default=False,
                         help='Disable physical valence masking on bond selection')
+    parser.add_argument('--no_scaffold_memory', action='store_true', default=False,
+                        help='Disable REINVENT Bemis-Murcko scaffold memory penalty in reward')
+    parser.add_argument('--no_tanimoto', action='store_true', default=False,
+                        help='Disable in-batch Tanimoto diversity penalty in reward')
     parser.add_argument('--no_filter', action='store_true', default=False,
                         help='Disable scaffold memory and chemical alert filters in reward')
     parser.add_argument('--no_connectivity_enforce', action='store_true', default=False,
                         help='Disable post-hoc connectivity enforcement fallback')
     parser.add_argument('--no_atom_filters', action='store_true', default=False,
                         help='Disable step 0 Carbon anchor and heteroatom cap filters')
+
+    # Dynamic atom size controls (e.g. 4 to 9 heavy atoms)
+    parser.add_argument('--min_atoms', type=int, default=4,
+                        help='Minimum heavy atom count for dynamic generation (default: 4)')
+    parser.add_argument('--max_atoms', type=int, default=9,
+                        help='Maximum heavy atom count for dynamic generation (default: 9)')
 
     # Device
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -97,8 +107,12 @@ def main():
         edge_policy_type=args.edge_policy,
         use_valence_mask=not args.no_valence_mask,
         use_filter=not args.no_filter,
+        use_scaffold_memory=not args.no_scaffold_memory,
+        use_tanimoto=not args.no_tanimoto,
         enforce_connectivity=not args.no_connectivity_enforce,
         use_atom_filters=not args.no_atom_filters,
+        min_atoms=args.min_atoms,
+        max_atoms=args.max_atoms,
         device=args.device
     )
 

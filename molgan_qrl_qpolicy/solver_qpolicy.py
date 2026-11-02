@@ -1,5 +1,6 @@
 import os
 import time
+import math
 import pickle
 import csv
 import logging
@@ -98,15 +99,23 @@ class SolverQPolicy:
                  edge_policy_type='quantum',
                  use_valence_mask=True,
                  use_filter=True,
+                 use_scaffold_memory=True,
+                 use_tanimoto=True,
                  enforce_connectivity=True,
                  use_atom_filters=True,
+                 min_atoms=4,
+                 max_atoms=9,
                  device=None):
 
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.min_atoms = min_atoms
+        self.max_atoms = max_atoms
         self.atom_policy_type = atom_policy_type
         self.edge_policy_type = edge_policy_type
         self.use_valence_mask = use_valence_mask
         self.use_filter = use_filter
+        self.use_scaffold_memory = use_scaffold_memory
+        self.use_tanimoto = use_tanimoto
         self.enforce_connectivity = enforce_connectivity
         self.use_atom_filters = use_atom_filters
         self.batch_size = batch_size
@@ -153,13 +162,16 @@ class SolverQPolicy:
             gamma=gamma,
             prop_metric=prop_metric,
             scaffold_bucket_size=scaffold_bucket_size,
-            use_filter=self.use_filter
+            use_filter=self.use_filter,
+            use_scaffold_memory=self.use_scaffold_memory,
+            use_tanimoto=self.use_tanimoto
         ).to(self.device)
 
         # 3. Networks: Actor with Q-Policy Head (Atom + Edge), Critic, Discriminator
         self.logger.info(f"Initializing Actor (Atom: {self.atom_policy_type}, Edge: {self.edge_policy_type}, Masking: {self.use_valence_mask}, Filters: {self.use_filter}), Critic, Discriminator...")
         self.actor = ActorRGCN_Quantum(
-            max_atoms=9,
+            max_atoms=self.max_atoms,
+            min_atoms=self.min_atoms,
             num_atom_types=4,
             num_edge_types=5,
             atom_policy_type=self.atom_policy_type,
@@ -227,7 +239,8 @@ class SolverQPolicy:
             # Phase 1: Environment Rollout with Dedicated 1-Qubit = 1-Atom Policy
             with torch.no_grad():
                 nodes, edges, node_feat, adj_t, trajs = self.actor.generate_mols(
-                    batch_size=self.batch_size, device=self.device, temperature=self.temperature
+                    batch_size=self.batch_size, device=self.device, temperature=self.temperature,
+                    min_atoms=self.min_atoms, max_atoms=self.max_atoms
                 )
                 old_log_probs, _ = self.actor.evaluate_trajectory_log_probs(trajs, temperature=self.temperature)
                 values = self.critic(node_feat, adj_t)
@@ -337,7 +350,7 @@ class SolverQPolicy:
             from molgan_qrl_qpolicy.reward import UNSTABLE_SMARTS_PATTERNS
             stable_count = sum(
                 1 for m in valid_mols
-                if sum(1 for a in m.GetAtoms() if a.GetAtomicNum() == 6) >= 4
+                if sum(1 for a in m.GetAtoms() if a.GetAtomicNum() == 6) >= max(2, int(math.ceil(0.40 * m.GetNumHeavyAtoms())))
                 and not any(pat and m.HasSubstructMatch(pat) for pat in UNSTABLE_SMARTS_PATTERNS)
             )
             stable_rate = (stable_count / total_count * 100.0) if total_count > 0 else 0.0

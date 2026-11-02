@@ -41,12 +41,13 @@ class ActorRGCN_Quantum(nn.Module):
       - Bond Formation: 3-Qubit Born-Rule Quantum Edge Policy (3Q)
     Includes exact size-matched classical counterparts for head-to-head comparison.
     """
-    def __init__(self, max_atoms=9, num_atom_types=4, num_edge_types=5,
+    def __init__(self, max_atoms=9, min_atoms=4, num_atom_types=4, num_edge_types=5,
                  node_dim=5, hidden_dims=[128, 64], dropout_rate=0.0,
                  atom_policy_type='dedicated_quantum', edge_policy_type='quantum',
                  use_valence_mask=True, enforce_connectivity=True, use_atom_filters=True):
         super(ActorRGCN_Quantum, self).__init__()
         self.max_atoms = max_atoms
+        self.min_atoms = min_atoms
         self.num_atom_types = num_atom_types
         self.num_edge_types = num_edge_types
         self.node_dim = node_dim
@@ -216,10 +217,26 @@ class ActorRGCN_Quantum(nn.Module):
 
         return mask
 
-    def generate_mols(self, batch_size, device='cpu', temperature=1.2):
+    def generate_mols(self, batch_size, device='cpu', temperature=1.2, min_atoms=None, max_atoms=None, target_sizes=None):
         """
-        Autoregressively generates strictly 9-atom molecules using the Quantum Policy Head.
+        Autoregressively generates molecules with dynamic atom sizes (e.g. 4 to 9)
+        using the Quantum Policy Head.
         """
+        if min_atoms is None:
+            min_atoms = getattr(self, 'min_atoms', 4)
+        if max_atoms is None:
+            max_atoms = self.max_atoms
+
+        if target_sizes is None:
+            if min_atoms == max_atoms:
+                target_sizes = torch.full((batch_size,), max_atoms, dtype=torch.long, device=device)
+            else:
+                target_sizes = torch.randint(min_atoms, max_atoms + 1, (batch_size,), dtype=torch.long, device=device)
+        elif isinstance(target_sizes, int):
+            target_sizes = torch.full((batch_size,), target_sizes, dtype=torch.long, device=device)
+        else:
+            target_sizes = target_sizes.to(device=device, dtype=torch.long)
+
         node_features = torch.zeros(batch_size, self.max_atoms, self.node_dim, device=device)
         node_features[:, :, 0] = 1.0
         node_indices = torch.zeros((batch_size, self.max_atoms), dtype=torch.long, device=device)
@@ -231,8 +248,14 @@ class ActorRGCN_Quantum(nn.Module):
         active_mask = torch.zeros(batch_size, self.max_atoms, device=device)
         trajectories = []
 
-        # Run for all 9 atoms
-        for step in range(self.max_atoms):
+        max_batch_atoms = int(target_sizes.max().item())
+
+        # Autoregressively add atoms up to the maximum target size in the batch
+        for step in range(max_batch_atoms):
+            active_step_mask = (step < target_sizes)
+            if not active_step_mask.any():
+                break
+
             # 1. Encode intermediate graph
             node_emb, graph_emb = self.forward_subgraph(node_features, adj_tensor, active_mask)
 
@@ -243,15 +266,16 @@ class ActorRGCN_Quantum(nn.Module):
                 free_val = torch.full((batch_size,), 4.0, device=device)
                 neighbor_types = torch.ones(batch_size, dtype=torch.long, device=device)
             else:
-                # Local anchor is the most recently added atom (step - 1)
                 neighbor_types = node_indices[:, step - 1]
                 free_val_list = []
                 for b in range(batch_size):
-                    anchor_t = int(neighbor_types[b].item())
-                    used = sum(BOND_ORDERS[adj_indices[b, step - 1, w].item()] for w in range(step))
-                    free_val_list.append(max(0.0, MAX_VALENCES[anchor_t] - used))
+                    if active_step_mask[b]:
+                        anchor_t = int(neighbor_types[b].item())
+                        used = sum(BOND_ORDERS[adj_indices[b, step - 1, w].item()] for w in range(step))
+                        free_val_list.append(max(0.0, MAX_VALENCES[anchor_t] - used))
+                    else:
+                        free_val_list.append(0.0)
                 free_val = torch.tensor(free_val_list, device=device)
-                # Angle estimation: 109.5 deg default, 120 deg if double bond present
                 bond_angles = torch.full((batch_size,), 1.91, device=device)
 
             # 3. Atom Policy execution (Quantum or Classical)
@@ -264,14 +288,12 @@ class ActorRGCN_Quantum(nn.Module):
                 else:
                     num_hetero = (node_indices[:, :step] > 1).sum(dim=-1)
                     for b in range(batch_size):
-                        if num_hetero[b] >= 4:
+                        if active_step_mask[b] and num_hetero[b] >= 4:
                             q_logits[b, 1:] = -1e9
 
             node_dist = Categorical(logits=q_logits / max(temperature, 1e-4))
             node_action = node_dist.sample()         # in {0, 1, 2, 3}
             node_log_prob = node_dist.log_prob(node_action)
-
-            # Map action {0, 1, 2, 3} to atom type {1: C, 2: N, 3: O, 4: F}
             atom_types = node_action + 1
 
             step_record = {
@@ -284,15 +306,23 @@ class ActorRGCN_Quantum(nn.Module):
                 'neighbor_types': neighbor_types.clone(),
                 'node_action': node_action,
                 'node_log_prob': node_log_prob,
+                'active_mask_step': active_step_mask.clone(),
                 'edge_records': []
             }
 
             for b in range(batch_size):
-                a_type = atom_types[b].item()
-                node_indices[b, step] = a_type
-                node_features[b, step, :] = 0.0
-                node_features[b, step, a_type] = 1.0
-                active_mask[b, step] = 1.0
+                if active_step_mask[b]:
+                    a_type = atom_types[b].item()
+                    node_indices[b, step] = a_type
+                    node_features[b, step, :] = 0.0
+                    node_features[b, step, a_type] = 1.0
+                    active_mask[b, step] = 1.0
+                else:
+                    # Inactive padded atom
+                    node_indices[b, step] = 0
+                    node_features[b, step, :] = 0.0
+                    node_features[b, step, 0] = 1.0
+                    active_mask[b, step] = 0.0
 
             # 4. Edge formation head
             if step > 0:
@@ -322,22 +352,31 @@ class ActorRGCN_Quantum(nn.Module):
                         'v': v,
                         'edge_action': edge_action,
                         'edge_log_prob': edge_log_prob,
-                        'valence_mask': valence_mask.clone() if valence_mask is not None else None
+                        'valence_mask': valence_mask.clone() if valence_mask is not None else None,
+                        'active_mask_step': active_step_mask.clone()
                     })
 
                     for b in range(batch_size):
-                        b_type = edge_action[b].item()
-                        adj_indices[b, u, v] = b_type
-                        adj_indices[b, v, u] = b_type
-                        adj_tensor[b, u, v, :] = 0.0
-                        adj_tensor[b, v, u, :] = 0.0
-                        adj_tensor[b, u, v, b_type] = 1.0
-                        adj_tensor[b, v, u, b_type] = 1.0
+                        if active_step_mask[b]:
+                            b_type = edge_action[b].item()
+                            adj_indices[b, u, v] = b_type
+                            adj_indices[b, v, u] = b_type
+                            adj_tensor[b, u, v, :] = 0.0
+                            adj_tensor[b, v, u, :] = 0.0
+                            adj_tensor[b, u, v, b_type] = 1.0
+                            adj_tensor[b, v, u, b_type] = 1.0
+                        else:
+                            adj_indices[b, u, v] = 0
+                            adj_indices[b, v, u] = 0
+                            adj_tensor[b, u, v, :] = 0.0
+                            adj_tensor[b, v, u, :] = 0.0
+                            adj_tensor[b, u, v, 0] = 1.0
+                            adj_tensor[b, v, u, 0] = 1.0
 
                 # Ensure node u is connected to at least one prior node to maintain connectivity (if enabled)
                 if self.enforce_connectivity:
                     for b in range(batch_size):
-                        if adj_indices[b, u, :u].sum() == 0:
+                        if active_step_mask[b] and adj_indices[b, u, :u].sum() == 0:
                             u_t = int(node_indices[b, u].item())
                             candidates = list(range(u))
                             candidates.sort(key=lambda c: 0 if int(node_indices[b, c].item()) == 1 else 1)
@@ -368,8 +407,10 @@ class ActorRGCN_Quantum(nn.Module):
         return node_indices, adj_indices, node_features, adj_tensor, trajectories
 
     def evaluate_trajectory_log_probs(self, trajectories, temperature=1.2):
-        """Re-computes action log probabilities and entropy across recorded trajectories."""
-        total_log_probs = 0.0
+        """Re-computes action log probabilities and entropy across recorded trajectories with active masking."""
+        B = trajectories[0]['node_action'].size(0)
+        device = trajectories[0]['node_action'].device
+        total_log_probs = torch.zeros(B, device=device)
         entropies = []
 
         for record in trajectories:
@@ -381,8 +422,9 @@ class ActorRGCN_Quantum(nn.Module):
             free_v = record['free_val']
             neigh_t = record['neighbor_types']
             node_act = record['node_action']
+            active_step_mask = record.get('active_mask_step', None)
 
-            _, graph_emb = self.forward_subgraph(node_feat, adj_t, mask)
+            node_emb, graph_emb = self.forward_subgraph(node_feat, adj_t, mask)
             q_logits = self.forward_atom(graph_emb, bond_ang, free_v, neigh_t)
 
             if self.use_atom_filters:
@@ -396,26 +438,37 @@ class ActorRGCN_Quantum(nn.Module):
                             q_logits[b, 1:] = -1e9
 
             node_dist = Categorical(logits=q_logits / max(temperature, 1e-4))
-            total_log_probs = total_log_probs + node_dist.log_prob(node_act)
-            entropies.append(node_dist.entropy().mean())
+            node_lp = node_dist.log_prob(node_act)
+            if active_step_mask is not None:
+                node_lp = torch.where(active_step_mask, node_lp, torch.zeros_like(node_lp))
+                if active_step_mask.any():
+                    entropies.append(node_dist.entropy()[active_step_mask].mean())
+            else:
+                entropies.append(node_dist.entropy().mean())
+            total_log_probs = total_log_probs + node_lp
 
             for e_rec in record['edge_records']:
                 u, v = e_rec['u'], e_rec['v']
                 edge_act = e_rec['edge_action']
                 val_mask = e_rec['valence_mask']
+                edge_active = e_rec.get('active_mask_step', active_step_mask)
 
-                node_emb, g_emb = self.forward_subgraph(node_feat, adj_t, mask)
-                pair_feat = torch.cat([node_emb[:, u, :], node_emb[:, v, :], g_emb], dim=-1)
+                pair_feat = torch.cat([node_emb[:, u, :], node_emb[:, v, :], graph_emb], dim=-1)
                 edge_logits = self.forward_edge(pair_feat)
 
                 if self.use_valence_mask and val_mask is not None:
                     edge_logits = torch.where(val_mask, edge_logits, torch.tensor(-1e9, device=edge_logits.device))
                 edge_dist = Categorical(logits=edge_logits / max(temperature, 1e-4))
-                log_p = edge_dist.log_prob(edge_act)
-                total_log_probs = total_log_probs + log_p
-                entropies.append(edge_dist.entropy().mean())
+                edge_lp = edge_dist.log_prob(edge_act)
+                if edge_active is not None:
+                    edge_lp = torch.where(edge_active, edge_lp, torch.zeros_like(edge_lp))
+                    if edge_active.any():
+                        entropies.append(edge_dist.entropy()[edge_active].mean())
+                else:
+                    entropies.append(edge_dist.entropy().mean())
+                total_log_probs = total_log_probs + edge_lp
 
-        mean_entropy = torch.stack(entropies).mean() if entropies else torch.tensor(0.0)
+        mean_entropy = torch.stack(entropies).mean() if entropies else torch.tensor(0.0, device=device)
         return total_log_probs, mean_entropy
 
 

@@ -148,11 +148,11 @@ def matrices_to_mols(node_indices, edge_indices):
         mol = rw_mol.GetMol()
         try:
             Chem.SanitizeMol(mol)
-            # Ensure connected molecule of sufficient size (>= 6 heavy atoms)
+            # Ensure connected molecule of sufficient size (>= 3 heavy atoms)
             frags = Chem.GetMolFrags(mol, asMols=True)
             if len(frags) > 1:
                 largest = max(frags, key=lambda m: m.GetNumAtoms())
-                if largest.GetNumHeavyAtoms() < 6:
+                if largest.GetNumHeavyAtoms() < 3:
                     mols.append(None)
                     continue
                 mol = largest
@@ -324,7 +324,8 @@ class CompositeRewardCalculator(nn.Module):
       6. In-Batch Morgan fingerprint diversity multiplier
     """
     def __init__(self, quantum_evaluator=None, alpha=0.4, beta=0.3, gamma=0.3,
-                 prop_metric='qed', scaffold_bucket_size=25, use_filter=True):
+                 prop_metric='qed', scaffold_bucket_size=25, use_filter=True,
+                 use_scaffold_memory=True, use_tanimoto=True):
         super(CompositeRewardCalculator, self).__init__()
         self.quantum_evaluator = quantum_evaluator
         self.alpha = alpha
@@ -332,6 +333,8 @@ class CompositeRewardCalculator(nn.Module):
         self.gamma = gamma
         self.prop_metric = prop_metric.lower()
         self.use_filter = use_filter
+        self.use_scaffold_memory = use_scaffold_memory
+        self.use_tanimoto = use_tanimoto
 
         # REINVENT Scaffold Memory Filter to eliminate mode collapse
         self.scaffold_filter = ScaffoldMemoryFilter(bucket_size=scaffold_bucket_size, penalty=0.0)
@@ -377,7 +380,10 @@ class CompositeRewardCalculator(nn.Module):
         r_prop = self.get_property_scores(mols).to(device)
 
         # 4. In-batch Tanimoto diversity multipliers
-        tanimoto_factors = calculate_batch_tanimoto_diversity(mols)
+        if self.use_tanimoto:
+            tanimoto_factors = calculate_batch_tanimoto_diversity(mols)
+        else:
+            tanimoto_factors = [1.0] * batch_size
 
         # 5. Physical Stability, REINVENT Structural Alerts, and Scaffold Memory
         rewards = []
@@ -403,8 +409,9 @@ class CompositeRewardCalculator(nn.Module):
             n_heavy = mol.GetNumHeavyAtoms()
             n_c = sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() == 6)
 
-            # Must have at least 4 Carbons out of 9 (>= 44% organic carbon)
-            if n_heavy < 3 or n_c < 4:
+            # Must have at least 40% Carbons (>= 2 Carbons for small 4-5 atom molecules, >= 4 for 9 atoms)
+            min_c = max(2, int(math.ceil(0.40 * n_heavy)))
+            if n_heavy < 3 or n_c < min_c:
                 rewards.append(-0.3)  # Low-carbon artifact penalty
                 stable_flags.append(0.0)
                 continue
@@ -427,12 +434,14 @@ class CompositeRewardCalculator(nn.Module):
                 stable_flags.append(0.0)
                 continue
 
-            # REINVENT Scaffold Memory Filter: checks if scaffold bucket is saturated
-            scaffold_factor = self.scaffold_filter.score_and_update(mol)
-            if scaffold_factor <= 0.0:
-                rewards.append(0.0)  # Zero reward for over-sampled scaffold (forces exploration)
-                stable_flags.append(1.0)
-                continue
+            # REINVENT Scaffold Memory Filter: checks if scaffold bucket is saturated (if enabled)
+            scaffold_factor = 1.0
+            if self.use_scaffold_memory:
+                scaffold_factor = self.scaffold_filter.score_and_update(mol)
+                if scaffold_factor <= 0.0:
+                    rewards.append(0.0)  # Zero reward for over-sampled scaffold (forces exploration)
+                    stable_flags.append(1.0)
+                    continue
 
             # Molecule is genuine, stable organic compound
             stable_flags.append(1.0)
