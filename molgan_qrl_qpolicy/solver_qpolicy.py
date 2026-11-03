@@ -357,7 +357,7 @@ class SolverQPolicy:
         valid_sample = [m for m in all_generated_mols if m is not None][:16]
         if valid_sample:
             try:
-                legends = [f"{Chem.MolToSmiles(m)}\nQED: {calculate_qed(m):.2f}" for m in valid_sample]
+                legends = [f"{Chem.MolToSmiles(m)}\nSAS: {calculate_sas(m):.2f} | QED: {calculate_qed(m):.2f}" for m in valid_sample]
                 img = Draw.MolsToGridImage(valid_sample, molsPerRow=4, subImgSize=(250, 250), legends=legends)
                 img.save(os.path.join(self.img_dir, f"epoch_{epoch}.png"))
             except Exception:

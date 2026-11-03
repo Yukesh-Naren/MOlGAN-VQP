@@ -231,11 +231,14 @@ class ActorRGCN_Quantum(nn.Module):
 
         return mask
 
-    def generate_mols(self, batch_size, device='cpu', temperature=1.2, min_atoms=None, max_atoms=None, target_sizes=None):
+    def generate_mols(self, batch_size, device=None, temperature=1.2, min_atoms=None, max_atoms=None, target_sizes=None):
         """
         Autoregressively generates molecules with dynamic atom sizes (e.g. 4 to 9)
         using the Quantum Policy Head.
         """
+        if device is None:
+            device = next(self.parameters()).device
+
         if min_atoms is None:
             min_atoms = getattr(self, 'min_atoms', 4)
         if max_atoms is None:
