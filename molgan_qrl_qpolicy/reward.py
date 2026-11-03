@@ -18,13 +18,12 @@ RDLogger.DisableLog('rdApp.*')
 ATOM_TYPES = ['PAD', 'C', 'N', 'O', 'F']
 ATOMIC_NUMBERS = [0, 6, 7, 8, 9]
 
-# 5 Bond types matching QM9 dataset:
+# 4 Bond types (Kekule representation - Aromatic removed):
 BOND_TYPES = [
     None,                           # Index 0: No bond
     Chem.rdchem.BondType.SINGLE,    # Index 1: Single bond
     Chem.rdchem.BondType.DOUBLE,    # Index 2: Double bond
-    Chem.rdchem.BondType.TRIPLE,    # Index 3: Triple bond
-    Chem.rdchem.BondType.AROMATIC   # Index 4: Aromatic bond
+    Chem.rdchem.BondType.TRIPLE     # Index 3: Triple bond
 ]
 
 # Load SA and NP scoring models if present

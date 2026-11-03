@@ -33,9 +33,9 @@ class QM9Dataset(Dataset):
     Lightweight PyTorch Dataset loader for QM9 sparse dataset.
     Converts integer node/edge labels into one-hot tensors:
       - Nodes: [N, 5] (PAD:0, C:1, N:2, O:3, F:4)
-      - Adjacency: [N, N, 5] (None:0, Single:1, Double:2, Triple:3, Aromatic:4)
+      - Adjacency: [N, N, num_edge_types] (None:0, Single:1, Double:2, Triple:3)
     """
-    def __init__(self, dataset_path):
+    def __init__(self, dataset_path, num_edge_types=4):
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"Dataset not found at {dataset_path}")
 
@@ -47,6 +47,37 @@ class QM9Dataset(Dataset):
         self.labels = data.get('labels', None)
         if self.labels is None:
             self.labels = np.ones(len(self.data_X), dtype=np.float32)
+
+        self.num_edge_types = num_edge_types
+        # When 4 edge types are used (Kekule representation), ensure data_A has no aromatic bonds (>=4)
+        if self.num_edge_types == 4 and np.any(self.data_A >= 4):
+            kekule_path = dataset_path.replace('.sparsedataset', '_kekulized.sparsedataset')
+            if os.path.exists(kekule_path):
+                with open(kekule_path, 'rb') as kf:
+                    kdata = pickle.load(kf)
+                    self.data_A = kdata['data_A']
+                    self.data_X = kdata.get('data_X', self.data_X)
+            else:
+                # Kekulize on the fly
+                BOND_MAP = {
+                    Chem.rdchem.BondType.SINGLE: 1,
+                    Chem.rdchem.BondType.DOUBLE: 2,
+                    Chem.rdchem.BondType.TRIPLE: 3
+                }
+                new_A = np.zeros_like(self.data_A)
+                for i, s in enumerate(data.get('smiles', [])):
+                    m = Chem.MolFromSmiles(s)
+                    if m is None: continue
+                    try:
+                        Chem.Kekulize(m, clearAromaticFlags=True)
+                        for b in m.GetBonds():
+                            u, v = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+                            bt = BOND_MAP.get(b.GetBondType(), 1)
+                            new_A[i, u, v] = bt
+                            new_A[i, v, u] = bt
+                    except Exception:
+                        pass
+                self.data_A = new_A
 
         self.smiles = set(data['smiles']) if 'smiles' in data else set()
         self.num_samples = len(self.data_X)
@@ -64,7 +95,7 @@ class QM9Dataset(Dataset):
         lbl_t = torch.tensor(lbl, dtype=torch.float32)
 
         x_one_hot = F.one_hot(x_t, num_classes=5).float()
-        a_one_hot = F.one_hot(a_t, num_classes=5).float()
+        a_one_hot = F.one_hot(a_t, num_classes=self.num_edge_types).float()
 
         return x_one_hot, a_one_hot, lbl_t
 
@@ -103,11 +134,13 @@ class SolverQPolicy:
                  use_tanimoto=True,
                  enforce_connectivity=True,
                  use_atom_filters=True,
+                 num_edge_types=4,
                  min_atoms=4,
                  max_atoms=9,
                  device=None):
 
         self.device = device if device else ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.num_edge_types = num_edge_types
         self.min_atoms = min_atoms
         self.max_atoms = max_atoms
         self.atom_policy_type = atom_policy_type
@@ -147,7 +180,7 @@ class SolverQPolicy:
 
         # 1. Dataset & DataLoader
         self.logger.info(f"Loading QM9 dataset from {dataset_path}...")
-        self.dataset = QM9Dataset(dataset_path)
+        self.dataset = QM9Dataset(dataset_path, num_edge_types=self.num_edge_types)
         self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True, drop_last=True)
         self.dataset_smiles = self.dataset.smiles
         self.logger.info(f"Dataset loaded: {len(self.dataset)} molecules.")
@@ -168,20 +201,20 @@ class SolverQPolicy:
         ).to(self.device)
 
         # 3. Networks: Actor with Q-Policy Head (Atom + Edge), Critic, Discriminator
-        self.logger.info(f"Initializing Actor (Atom: {self.atom_policy_type}, Edge: {self.edge_policy_type}, Masking: {self.use_valence_mask}, Filters: {self.use_filter}), Critic, Discriminator...")
+        self.logger.info(f"Initializing Actor (Atom: {self.atom_policy_type}, Edge: {self.edge_policy_type}, Masking: {self.use_valence_mask}, Filters: {self.use_filter}, Edge Types: {self.num_edge_types}), Critic, Discriminator...")
         self.actor = ActorRGCN_Quantum(
             max_atoms=self.max_atoms,
             min_atoms=self.min_atoms,
             num_atom_types=4,
-            num_edge_types=5,
+            num_edge_types=self.num_edge_types,
             atom_policy_type=self.atom_policy_type,
             edge_policy_type=self.edge_policy_type,
             use_valence_mask=self.use_valence_mask,
             enforce_connectivity=self.enforce_connectivity,
             use_atom_filters=self.use_atom_filters
         ).to(self.device)
-        self.critic = CriticRGCN(node_dim=5, edge_types=5).to(self.device)
-        self.discriminator = DiscriminatorRGCN(node_dim=5, edge_types=5).to(self.device)
+        self.critic = CriticRGCN(node_dim=5, edge_types=self.num_edge_types).to(self.device)
+        self.discriminator = DiscriminatorRGCN(node_dim=5, edge_types=self.num_edge_types).to(self.device)
 
         # 4. Rollout Buffer
         self.buffer = PPOBuffer(clip_eps=clip_eps)

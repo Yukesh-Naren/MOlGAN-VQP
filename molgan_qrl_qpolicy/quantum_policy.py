@@ -261,7 +261,109 @@ class QuantumAtomPolicy2Q(nn.Module):
 
 
 # =============================================================================
-# 2. 3-QUBIT BOND FORMATION CIRCUIT (5 BASIS STATES FOR 5 QM9 BOND TYPES)
+# 2. 2-QUBIT BOND FORMATION CIRCUIT (4 BASIS STATES FOR 4 KEKULÉ BOND TYPES)
+# =============================================================================
+# Hilbert Space Decomposition:
+#   2 qubits span an exact 4-dimensional Hilbert space (2^2 = 4 basis states):
+#       |00> <---> None (No Bond)     [Index 0]  (Graph sparsity / disconnect)
+#       |01> <---> Single Bond (1.0)  [Index 1]  (Sigma covalent bond)
+#       |10> <---> Double Bond (2.0)  [Index 2]  (Sigma + Pi bond)
+#       |11> <---> Triple Bond (3.0)  [Index 3]  (Sigma + 2 Pi bonds)
+#   Zero auxiliary basis states: 100% of the quantum state directly maps to physical bonds!
+# =============================================================================
+
+class ClassicalEdgeCircuit2Q(nn.Module):
+    """Classical Size-Matched Counterpart to 2-Qubit Edge Policy (4 classes)."""
+    def __init__(self, in_features=192, hidden_dim=8, num_classes=4):
+        super(ClassicalEdgeCircuit2Q, self).__init__()
+        self.adapter = nn.Sequential(
+            nn.Linear(in_features, 32),
+            nn.LeakyReLU(0.2),
+            nn.Linear(32, 2),
+            nn.Sigmoid()
+        )
+        self.head = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def forward(self, pair_feat):
+        angles = self.adapter(pair_feat)
+        logits = self.head(angles)
+        probs = torch.softmax(logits, dim=-1)
+        return logits, probs
+
+
+class QuantumEdgePolicy2Q(nn.Module):
+    """
+    2-Qubit Variational Quantum Policy Head for 4 Bond Types (Kekule representation):
+      - 2 qubits span 2^2 = 4 computational basis states (|00>, |01>, |10>, |11>).
+      - Directly maps to: None (0), Single (1), Double (2), Triple (3).
+      - No auxiliary basis state slicing required.
+      - Trainable parameters: 18 Euler angles (3 layers x 2 qubits x 3) + 1 learned scale = 19 params.
+    """
+    def __init__(self, in_features=192, n_layers=3, output_scale=3.0, learnable_scale=True):
+        super(QuantumEdgePolicy2Q, self).__init__()
+        self.n_qubits = 2
+        self.n_layers = n_layers
+
+        if learnable_scale:
+            self.output_scale = nn.Parameter(torch.tensor(float(output_scale)))
+        else:
+            self.register_buffer('output_scale', torch.tensor(float(output_scale)), persistent=False)
+
+        self.adapter = nn.Sequential(
+            nn.Linear(in_features, 32),
+            nn.LeakyReLU(0.2),
+            nn.Linear(32, self.n_qubits),
+            nn.Sigmoid()
+        )
+
+        self.weights = nn.Parameter(0.01 * torch.randn(n_layers, self.n_qubits, 3))
+        self.dev = qml.device('default.qubit', wires=self.n_qubits)
+        self._build_qnode()
+
+    def _build_qnode(self):
+        @qml.qnode(self.dev, interface='torch', diff_method='backprop')
+        def circuit(inputs, weights):
+            if inputs.ndim == 1:
+                inputs = inputs.unsqueeze(0)
+
+            # Angle encoding on the 2 qubits across the batch
+            for i in range(self.n_qubits):
+                qml.RY(inputs[:, i] * 3.14159265, wires=i)
+
+            # Entanglement coupling both qubits with SU(2) Euler rotations
+            for layer in range(self.n_layers):
+                qml.CNOT(wires=[0, 1])
+                qml.CNOT(wires=[1, 0])
+                for i in range(self.n_qubits):
+                    qml.Rot(weights[layer, i, 0], weights[layer, i, 1], weights[layer, i, 2], wires=i)
+
+            return qml.probs(wires=[0, 1])
+
+        self.qnode = circuit
+
+    def forward(self, pair_feat):
+        device = pair_feat.device
+        angles = self.adapter(pair_feat)
+
+        if angles.device.type != 'cpu':
+            probs_4 = self.qnode(angles.cpu(), self.weights.cpu()).to(device=device, dtype=pair_feat.dtype)
+        else:
+            probs_4 = self.qnode(angles, self.weights).to(device=device, dtype=pair_feat.dtype)
+
+        if probs_4.ndim == 1:
+            probs_4 = probs_4.unsqueeze(0)
+
+        # 4 states map 100% to None, Single, Double, Triple
+        logits = self.output_scale * torch.log(probs_4 + 1e-8)
+        return logits, probs_4
+
+
+# =============================================================================
+# 3. 3-QUBIT BOND FORMATION CIRCUIT (LEGACY 5 BASIS STATES)
 # =============================================================================
 # Hilbert Space Decomposition:
 #   3 qubits span an 8-dimensional Hilbert space (2^3 = 8 basis states):

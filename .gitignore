@@ -42,6 +42,7 @@ data/data/
 !data/NP_score.pkl.gz
 !data/qm9_with_negatives.sparsedataset
 !data/qm9_dynamic_balanced.sparsedataset
+!data/qm9_dynamic_kekulized.sparsedataset
 !data/qm9.smi
 !data/sparse_molecular_dataset.py
 !data/download_dataset.sh

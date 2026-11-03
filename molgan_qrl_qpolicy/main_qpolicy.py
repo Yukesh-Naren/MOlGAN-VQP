@@ -69,6 +69,8 @@ def parse_args():
                         help='Minimum heavy atom count for dynamic generation (default: 4)')
     parser.add_argument('--max_atoms', type=int, default=9,
                         help='Maximum heavy atom count for dynamic generation (default: 9)')
+    parser.add_argument('--num_edge_types', type=int, default=4,
+                        help='Number of bond/edge types (default: 4 for Kekule [None, Single, Double, Triple])')
 
     # Device
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -111,6 +113,7 @@ def main():
         use_tanimoto=not args.no_tanimoto,
         enforce_connectivity=not args.no_connectivity_enforce,
         use_atom_filters=not args.no_atom_filters,
+        num_edge_types=args.num_edge_types,
         min_atoms=args.min_atoms,
         max_atoms=args.max_atoms,
         device=args.device

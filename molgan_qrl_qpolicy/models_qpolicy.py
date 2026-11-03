@@ -10,6 +10,8 @@ from molgan_qrl_qpolicy.quantum_policy import (
     DedicatedAtomQuantumPolicy,
     QuantumAtomPolicy2Q,
     ClassicalAtomCircuit2Q,
+    QuantumEdgePolicy2Q,
+    ClassicalEdgeCircuit2Q,
     QuantumEdgePolicy3Q,
     ClassicalEdgeCircuit3Q
 )
@@ -23,14 +25,13 @@ MAX_VALENCES = {
     4: 1   # F
 }
 
-# Bond orders matching bond type index:
-# 0: None, 1: Single (1.0), 2: Double (2.0), 3: Triple (3.0), 4: Aromatic (1.5)
+# Bond orders matching bond type index (Kekule representation - no aromatic bonds):
+# 0: None, 1: Single (1.0), 2: Double (2.0), 3: Triple (3.0)
 BOND_ORDERS = {
     0: 0.0,
     1: 1.0,
     2: 2.0,
-    3: 3.0,
-    4: 1.5
+    3: 3.0
 }
 
 
@@ -38,10 +39,10 @@ class ActorRGCN_Quantum(nn.Module):
     """
     Autoregressive Graph Convolutional Actor with Variational Quantum Policies:
       - Atom Selection: Dedicated 1-Qubit=1-Atom (4Q) or 2-Qubit Born-Rule (2Q)
-      - Bond Formation: 3-Qubit Born-Rule Quantum Edge Policy (3Q)
+      - Bond Formation: 2-Qubit Born-Rule Quantum Edge Policy (2Q, 4 Kekule bond types)
     Includes exact size-matched classical counterparts for head-to-head comparison.
     """
-    def __init__(self, max_atoms=9, min_atoms=4, num_atom_types=4, num_edge_types=5,
+    def __init__(self, max_atoms=9, min_atoms=4, num_atom_types=4, num_edge_types=4,
                  node_dim=5, hidden_dims=[128, 64], dropout_rate=0.0,
                  atom_policy_type='dedicated_quantum', edge_policy_type='quantum',
                  use_valence_mask=True, enforce_connectivity=True, use_atom_filters=True):
@@ -120,12 +121,25 @@ class ActorRGCN_Quantum(nn.Module):
         # =========================================================================
         pair_in_dim = self.encoder.out_dim * 3
 
-        if self.edge_policy_type in ['quantum', 'quantum_3q', 'vqc']:
+        if self.edge_policy_type in ['quantum', 'quantum_2q', 'vqc'] and num_edge_types == 4:
+            self.edge_policy = QuantumEdgePolicy2Q(
+                in_features=pair_in_dim,
+                n_layers=3,
+                output_scale=3.0,
+                learnable_scale=True
+            )
+        elif self.edge_policy_type in ['quantum', 'quantum_3q', 'vqc']:
             self.edge_policy = QuantumEdgePolicy3Q(
                 in_features=pair_in_dim,
                 n_layers=3,
                 output_scale=3.0,
                 learnable_scale=True
+            )
+        elif self.edge_policy_type in ['classical', 'classical_2q', 'size_matched'] and num_edge_types == 4:
+            self.edge_policy = ClassicalEdgeCircuit2Q(
+                in_features=pair_in_dim,
+                hidden_dim=8,
+                num_classes=num_edge_types
             )
         elif self.edge_policy_type in ['classical', 'classical_3q', 'size_matched']:
             self.edge_policy = ClassicalEdgeCircuit3Q(
@@ -474,7 +488,7 @@ class ActorRGCN_Quantum(nn.Module):
 
 class CriticRGCN(nn.Module):
     """Value Critic V_psi(G) predicting expected cumulative return."""
-    def __init__(self, node_dim=5, edge_types=5, hidden_dims=[128, 64], dropout_rate=0.0):
+    def __init__(self, node_dim=5, edge_types=4, hidden_dims=[128, 64], dropout_rate=0.0):
         super(CriticRGCN, self).__init__()
         self.encoder = RelationalGCN(
             node_dim=node_dim,
@@ -495,7 +509,7 @@ class CriticRGCN(nn.Module):
 
 class DiscriminatorRGCN(nn.Module):
     """Adversarial Discriminator D_phi(G) evaluating realism of real vs generated graphs."""
-    def __init__(self, node_dim=5, edge_types=5, hidden_dims=[128, 64], dropout_rate=0.1):
+    def __init__(self, node_dim=5, edge_types=4, hidden_dims=[128, 64], dropout_rate=0.1):
         super(DiscriminatorRGCN, self).__init__()
         self.encoder = RelationalGCN(
             node_dim=node_dim,
