@@ -72,6 +72,20 @@ def parse_args():
     parser.add_argument('--num_edge_types', type=int, default=4,
                         help='Number of bond/edge types (default: 4 for Kekule [None, Single, Double, Triple])')
 
+    # Quality-gated size bonus for larger molecules
+    parser.add_argument('--no_size_bonus', action='store_true', default=False,
+                        help='Disable quality-gated size bonus for larger molecules')
+    parser.add_argument('--size_bonus_weight', type=float, default=0.20,
+                        help='Maximum extra reward bonus for larger molecules (default: 0.20)')
+    parser.add_argument('--min_qed_for_size', type=float, default=0.25,
+                        help='Minimum QED threshold to qualify for size bonus (default: 0.25)')
+    parser.add_argument('--target_qed_for_size', type=float, default=0.45,
+                        help='Target QED threshold for full size bonus (default: 0.45)')
+    parser.add_argument('--max_sas_for_size', type=float, default=4.5,
+                        help='Maximum raw SAS threshold to qualify for size bonus (default: 4.5)')
+    parser.add_argument('--target_sas_for_size', type=float, default=2.5,
+                        help='Target raw SAS threshold for full size bonus (default: 2.5)')
+
     # Device
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Computation device (cuda or cpu)')
@@ -113,6 +127,12 @@ def main():
         use_tanimoto=not args.no_tanimoto,
         enforce_connectivity=not args.no_connectivity_enforce,
         use_atom_filters=not args.no_atom_filters,
+        use_size_bonus=not args.no_size_bonus,
+        size_bonus_weight=args.size_bonus_weight,
+        min_qed_for_size=args.min_qed_for_size,
+        target_qed_for_size=args.target_qed_for_size,
+        max_sas_for_size=args.max_sas_for_size,
+        target_sas_for_size=args.target_sas_for_size,
         num_edge_types=args.num_edge_types,
         min_atoms=args.min_atoms,
         max_atoms=args.max_atoms,

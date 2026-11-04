@@ -134,6 +134,12 @@ class SolverQPolicy:
                  use_tanimoto=True,
                  enforce_connectivity=True,
                  use_atom_filters=True,
+                 use_size_bonus=True,
+                 size_bonus_weight=0.20,
+                 min_qed_for_size=0.25,
+                 target_qed_for_size=0.45,
+                 max_sas_for_size=4.5,
+                 target_sas_for_size=2.5,
                  num_edge_types=4,
                  min_atoms=4,
                  max_atoms=9,
@@ -143,6 +149,12 @@ class SolverQPolicy:
         self.num_edge_types = num_edge_types
         self.min_atoms = min_atoms
         self.max_atoms = max_atoms
+        self.use_size_bonus = use_size_bonus
+        self.size_bonus_weight = size_bonus_weight
+        self.min_qed_for_size = min_qed_for_size
+        self.target_qed_for_size = target_qed_for_size
+        self.max_sas_for_size = max_sas_for_size
+        self.target_sas_for_size = target_sas_for_size
         self.atom_policy_type = atom_policy_type
         self.edge_policy_type = edge_policy_type
         self.use_valence_mask = use_valence_mask
@@ -197,7 +209,15 @@ class SolverQPolicy:
             scaffold_bucket_size=scaffold_bucket_size,
             use_filter=self.use_filter,
             use_scaffold_memory=self.use_scaffold_memory,
-            use_tanimoto=self.use_tanimoto
+            use_tanimoto=self.use_tanimoto,
+            use_size_bonus=self.use_size_bonus,
+            size_bonus_weight=self.size_bonus_weight,
+            min_qed_for_size=self.min_qed_for_size,
+            target_qed_for_size=self.target_qed_for_size,
+            max_sas_for_size=self.max_sas_for_size,
+            target_sas_for_size=self.target_sas_for_size,
+            min_atoms=self.min_atoms,
+            max_atoms=self.max_atoms
         ).to(self.device)
 
         # 3. Networks: Actor with Q-Policy Head (Atom + Edge), Critic, Discriminator
@@ -242,7 +262,7 @@ class SolverQPolicy:
             writer = csv.writer(f)
             writer.writerow([
                 'epoch', 'time_sec', 'loss_d', 'loss_pi', 'loss_v', 'r_avg',
-                'valid_rate', 'stable_rate', 'unique_rate', 'novel_rate', 'qed', 'logp', 'sas', 'np', 'dc'
+                'valid_rate', 'stable_rate', 'unique_rate', 'novel_rate', 'qed', 'logp', 'sas', 'np', 'dc', 'size_bonus'
             ])
 
     def train_epoch(self, epoch):
@@ -254,6 +274,7 @@ class SolverQPolicy:
         total_loss_pi = 0.0
         total_loss_v = 0.0
         total_rewards = []
+        total_size_bonuses = []
         all_generated_mols = []
 
         data_iter = iter(self.dataloader)
@@ -285,6 +306,7 @@ class SolverQPolicy:
                 rewards, breakdown = self.reward_calculator(mols, disc_scores)
 
             total_rewards.append(rewards.mean().item())
+            total_size_bonuses.append(breakdown.get('mean_size_bonus', 0.0))
             self.buffer.store(trajs, old_log_probs, rewards, values)
 
             # Phase 2: Discriminator Update
@@ -345,13 +367,15 @@ class SolverQPolicy:
         avg_loss_pi = total_loss_pi / n_steps
         avg_loss_v = total_loss_v / n_steps
         avg_reward = np.mean(total_rewards)
+        avg_size_bonus = float(np.mean(total_size_bonuses)) if total_size_bonuses else 0.0
 
         metrics = self.evaluate_molecules(all_generated_mols)
         metrics.update({
             'loss_d': avg_loss_d,
             'loss_pi': avg_loss_pi,
             'loss_v': avg_loss_v,
-            'avg_reward': avg_reward
+            'avg_reward': avg_reward,
+            'size_bonus': avg_size_bonus
         })
 
         valid_sample = [m for m in all_generated_mols if m is not None][:16]
@@ -448,7 +472,8 @@ class SolverQPolicy:
                     round(metrics['logp'], 3),
                     round(metrics['sas'], 3),
                     round(metrics['np'], 3),
-                    round(metrics['dc'], 3)
+                    round(metrics['dc'], 3),
+                    round(metrics.get('size_bonus', 0.0), 4)
                 ])
 
             self.logger.info(
@@ -456,7 +481,7 @@ class SolverQPolicy:
                 f"Loss_D: {metrics['loss_d']:.4f} | Loss_Pi: {metrics['loss_pi']:.4f} | Loss_V: {metrics['loss_v']:.4f} | "
                 f"R_avg: {metrics['avg_reward']:.4f} | Valid: {metrics['valid_rate']:.1f}% | Stable: {metrics['stable_rate']:.1f}% | "
                 f"Unique: {metrics['unique_rate']:.1f}% | Novel: {metrics['novel_rate']:.1f}% | "
-                f"QED: {metrics['qed']:.3f} | SAS: {metrics['sas']:.3f} | DC: {metrics['dc']:.3f}"
+                f"QED: {metrics['qed']:.3f} | SAS: {metrics['sas']:.3f} | DC: {metrics['dc']:.3f} | Size_B: {metrics.get('size_bonus', 0.0):.3f}"
             )
 
             # Save best checkpoint
