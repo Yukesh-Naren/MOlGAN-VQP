@@ -324,11 +324,7 @@ class CompositeRewardCalculator(nn.Module):
     """
     def __init__(self, quantum_evaluator=None, alpha=0.4, beta=0.3, gamma=0.3,
                  prop_metric='qed', scaffold_bucket_size=25, use_filter=True,
-                 use_scaffold_memory=True, use_tanimoto=True,
-                 use_size_bonus=True, size_bonus_weight=0.20,
-                 min_qed_for_size=0.25, target_qed_for_size=0.45,
-                 max_sas_for_size=4.5, target_sas_for_size=2.5,
-                 min_atoms=4, max_atoms=9):
+                 use_scaffold_memory=True, use_tanimoto=True):
         super(CompositeRewardCalculator, self).__init__()
         self.quantum_evaluator = quantum_evaluator
         self.alpha = alpha
@@ -338,46 +334,9 @@ class CompositeRewardCalculator(nn.Module):
         self.use_filter = use_filter
         self.use_scaffold_memory = use_scaffold_memory
         self.use_tanimoto = use_tanimoto
-        self.use_size_bonus = use_size_bonus
-        self.size_bonus_weight = size_bonus_weight
-        self.min_qed_for_size = min_qed_for_size
-        self.target_qed_for_size = target_qed_for_size
-        self.max_sas_for_size = max_sas_for_size
-        self.target_sas_for_size = target_sas_for_size
-        self.min_atoms = min_atoms
-        self.max_atoms = max_atoms
 
         # REINVENT Scaffold Memory Filter to eliminate mode collapse
         self.scaffold_filter = ScaffoldMemoryFilter(bucket_size=scaffold_bucket_size, penalty=0.0)
-
-    def calculate_size_bonus(self, mol):
-        """
-        Calculates a quality-gated size bonus for larger molecules (N >= 5 atoms).
-        Conditioned strictly on:
-          1. Validity and stability (verified before this call)
-          2. Good drug-likeness (QED >= min_qed_for_size)
-          3. Good synthetic accessibility (Raw SAS <= max_sas_for_size)
-        """
-        if not self.use_size_bonus or mol is None:
-            return 0.0, 0.0
-
-        n_heavy = mol.GetNumHeavyAtoms()
-        if n_heavy <= self.min_atoms:
-            return 0.0, 0.0
-
-        # Normalized size factor in [0.0, 1.0] for atoms in range [min_atoms+1, max_atoms]
-        size_factor = min(1.0, max(0.0, (n_heavy - self.min_atoms) / float(max(self.max_atoms - self.min_atoms, 1))))
-
-        # Continuous Quality Gates
-        qed_val = calculate_qed(mol)
-        raw_sas = calculate_sas(mol, norm=False)
-
-        q_qed = min(1.0, max(0.0, (qed_val - self.min_qed_for_size) / (self.target_qed_for_size - self.min_qed_for_size)))
-        q_sas = min(1.0, max(0.0, (self.max_sas_for_size - raw_sas) / (self.max_sas_for_size - self.target_sas_for_size)))
-        q_gate = q_qed * q_sas
-
-        bonus = self.size_bonus_weight * size_factor * q_gate
-        return bonus, q_gate
 
     def get_property_scores(self, mols):
         scores = []
@@ -428,25 +387,20 @@ class CompositeRewardCalculator(nn.Module):
         # 5. Physical Stability, REINVENT Structural Alerts, and Scaffold Memory
         rewards = []
         stable_flags = []
-        size_bonuses = []
         for i, mol in enumerate(mols):
             if mol is None:
                 rewards.append(-0.5)  # Invalid graph penalty
                 stable_flags.append(0.0)
-                size_bonuses.append(0.0)
                 continue
 
             # When filters are disabled, reward pure generation based on quantum + D + prop
             if not self.use_filter:
                 stable_flags.append(1.0)
-                sz_bonus, _ = self.calculate_size_bonus(mol)
-                size_bonuses.append(sz_bonus)
                 r_pos = (
                     0.05 +
                     self.alpha * r_quantum[i].item() +
                     self.beta * prob_real[i].item() +
-                    self.gamma * r_prop[i].item() +
-                    sz_bonus
+                    self.gamma * r_prop[i].item()
                 )
                 rewards.append(min(1.0, max(0.0, r_pos)))
                 continue
@@ -459,7 +413,6 @@ class CompositeRewardCalculator(nn.Module):
             if n_heavy < 3 or n_c < min_c:
                 rewards.append(-0.3)  # Low-carbon artifact penalty
                 stable_flags.append(0.0)
-                size_bonuses.append(0.0)
                 continue
 
             # Check standard unstable motifs
@@ -472,14 +425,12 @@ class CompositeRewardCalculator(nn.Module):
             if has_unstable_motif:
                 rewards.append(-0.3)  # Chemically unstable motif penalty
                 stable_flags.append(0.0)
-                size_bonuses.append(0.0)
                 continue
 
             # REINVENT Structural Alert & Bond Strain Check (Bredt's rule, strained 3-rings)
             if check_reinvent_structural_alerts(mol):
                 rewards.append(-0.25)  # Strained cage/ring penalty
                 stable_flags.append(0.0)
-                size_bonuses.append(0.0)
                 continue
 
             # REINVENT Scaffold Memory Filter: checks if scaffold bucket is saturated (if enabled)
@@ -489,7 +440,6 @@ class CompositeRewardCalculator(nn.Module):
                 if scaffold_factor <= 0.0:
                     rewards.append(0.0)  # Zero reward for over-sampled scaffold (forces exploration)
                     stable_flags.append(1.0)
-                    size_bonuses.append(0.0)
                     continue
 
             # Molecule is genuine, stable organic compound
@@ -497,17 +447,12 @@ class CompositeRewardCalculator(nn.Module):
             c_frac = n_c / float(n_heavy)
             c_factor = min(1.0, c_frac / 0.5)
 
-            # Quality-Gated Size Bonus for larger molecules with good QED and SAS
-            sz_bonus, _ = self.calculate_size_bonus(mol)
-            size_bonuses.append(sz_bonus)
-
-            # Base positive reward with gated size bonus
+            # Base positive reward
             r_pos = (
                 0.05 +
                 self.alpha * r_quantum[i].item() +
                 self.beta * prob_real[i].item() +
-                self.gamma * r_prop[i].item() +
-                sz_bonus
+                self.gamma * r_prop[i].item()
             ) * c_factor
 
             # In-Batch Tanimoto Diversity Multiplier & Scaffold Factor
@@ -516,15 +461,12 @@ class CompositeRewardCalculator(nn.Module):
 
         total_reward = torch.tensor(rewards, dtype=torch.float32, device=device).view(-1, 1)
         stable_tensor = torch.tensor(stable_flags, dtype=torch.float32, device=device).view(-1, 1)
-        size_bonus_tensor = torch.tensor(size_bonuses, dtype=torch.float32, device=device).view(-1, 1)
 
         breakdown = {
             'r_quantum': r_quantum,
             'r_disc': prob_real,
             'r_prop': r_prop,
             'stable_flags': stable_tensor,
-            'size_bonuses': size_bonus_tensor,
-            'mean_size_bonus': float(size_bonus_tensor.mean().item()),
             'stability_rate': stable_tensor.mean().item(),
             'validity_rate': sum(1 for m in mols if m is not None) / float(batch_size)
         }
