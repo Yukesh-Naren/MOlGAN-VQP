@@ -64,7 +64,7 @@ To resolve these challenges, this paper presents \textbf{MolGAN-VQP}, a modular 
 \label{fig:architecture}
 \end{figure*}
 
-The architecture of MolGAN-VQP consists of four primary subsystems (illustrated in Fig.~ef{fig:architecture}): (1) Classical RGCN Subgraph Encoder \cite{schlichtkrull2018modeling}, (2) Dual 4-Qubit Variational Quantum Policy Heads, (3) Dynamic Valence Engine, and (4) Proximal Policy Optimization (PPO) Buffer \cite{schulman2017} with Composite Reward Evaluation.
+The architecture of MolGAN-VQP consists of four primary subsystems (illustrated in Fig.~\ref{fig:architecture}): (1) Classical RGCN Subgraph Encoder \cite{schlichtkrull2018modeling}, (2) Dual 4-Qubit Variational Quantum Policy Heads, (3) Dynamic Valence Engine, and (4) Proximal Policy Optimization (PPO) Buffer \cite{schulman2017} with Composite Reward Evaluation.
 
 \subsection{Autoregressive MDP Formulation}
 We formulate molecular synthesis as an episodic MDP defined by $\mathcal{M} = (\mathcal{S}, \mathcal{A}, \mathcal{P}, \mathcal{R}, \gamma)$:
@@ -195,8 +195,6 @@ Table~\ref{tab:ablation} illustrates the ablation between the standard 4-pass PP
 
 \subsection{Benchmarking Against Published Literature Frameworks}
 To strictly benchmark generative capability and drug candidate quality under the standardized literature evaluation protocol established by Hergli et al. \cite{hergli2026}, we evaluated $N=497$ independent sample molecules from the trained 200-epoch MolGAN-VQP model against canonical QM9 SMILES ($N_{\text{ref}}=133,802$) alongside published classical and quantum baselines from the literature, including MolGAN \cite{decao2018molgan}, MolGAN-QRL \cite{hergli2026}, MolGAN-QRL-S \cite{hergli2026}, QGAN-HG \cite{hergli2026}, and GCPN \cite{you2018graph}.
-
-
 
 \begin{table*}[t]
 \centering
