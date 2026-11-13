@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import pennylane as qml
 
 
-class JerbiDataReuploadingPQC(nn.Module):
+class DataReuploadingPQC(nn.Module):
     """
     Parametrized Quantum Policy Head based on Jerbi et al. (NeurIPS 2021):
     'Parametrized Quantum Policies for Reinforcement Learning' (arXiv:2103.05577).
@@ -27,7 +27,7 @@ class JerbiDataReuploadingPQC(nn.Module):
            pi(a|s) = Softmax(logits)
     """
     def __init__(self, in_features, n_qubits=4, n_layers=3, output_scale=3.0, learnable_scale=True):
-        super(JerbiDataReuploadingPQC, self).__init__()
+        super(DataReuploadingPQC, self).__init__()
         self.in_features = in_features
         self.n_qubits = n_qubits
         self.n_layers = n_layers
@@ -121,14 +121,14 @@ class JerbiDataReuploadingPQC(nn.Module):
         if expvals.ndim == 1:
             expvals = expvals.unsqueeze(0)
 
-        # Jerbi Softmax Readout: logits = beta * <Z>
+        # Softmax Readout: logits = beta * <Z>
         logits = self.output_scale * expvals
         return logits, expvals
 
 
-class JerbiAtomPolicy(nn.Module):
+class AtomPolicy(nn.Module):
     """
-    Jerbi Softmax-PQC for Heavy Atom Selection:
+    Softmax-PQC for Heavy Atom Selection:
       - 4 qubits correspond to 4 atom types:
           Qubit 0: Carbon (C)
           Qubit 1: Nitrogen (N)
@@ -138,8 +138,8 @@ class JerbiAtomPolicy(nn.Module):
       - Softmax action selection over atoms.
     """
     def __init__(self, in_features=64, n_layers=3, output_scale=3.0, learnable_scale=True):
-        super(JerbiAtomPolicy, self).__init__()
-        self.pqc = JerbiDataReuploadingPQC(
+        super(AtomPolicy, self).__init__()
+        self.pqc = DataReuploadingPQC(
             in_features=in_features,
             n_qubits=4,
             n_layers=n_layers,
@@ -152,9 +152,9 @@ class JerbiAtomPolicy(nn.Module):
         return logits, expvals
 
 
-class JerbiEdgePolicy(nn.Module):
+class EdgePolicy(nn.Module):
     """
-    Jerbi Softmax-PQC for Bond Formation:
+    Softmax-PQC for Bond Formation:
       - 4 qubits correspond to 4 Kekule bond types:
           Qubit 0: None (No bond)
           Qubit 1: Single bond
@@ -164,8 +164,8 @@ class JerbiEdgePolicy(nn.Module):
       - Softmax action selection over candidate edge types.
     """
     def __init__(self, in_features=192, n_layers=3, output_scale=3.0, learnable_scale=True):
-        super(JerbiEdgePolicy, self).__init__()
-        self.pqc = JerbiDataReuploadingPQC(
+        super(EdgePolicy, self).__init__()
+        self.pqc = DataReuploadingPQC(
             in_features=in_features,
             n_qubits=4,
             n_layers=n_layers,

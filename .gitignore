@@ -40,6 +40,7 @@ data/data/
 # Allow essential scoring models and compressed dataset
 !data/SA_score.pkl.gz
 !data/NP_score.pkl.gz
+!data/qm9_5k_kekulized.sparsedataset
 !data/qm9_with_negatives.sparsedataset
 !data/qm9_dynamic_balanced.sparsedataset
 !data/qm9_dynamic_kekulized.sparsedataset
@@ -47,6 +48,13 @@ data/data/
 !data/sparse_molecular_dataset.py
 !data/download_dataset.sh
 
-# Manuscript files: keep PDF and TeX
+# Manuscript and reports: keep PDF, TeX, figures, and cls
 !paper_manuscript/overleaf_qpolicy_paper.pdf
 !paper_manuscript/overleaf_qpolicy_paper.tex
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.synctex.gz

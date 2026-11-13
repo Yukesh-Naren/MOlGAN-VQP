@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from molgan_vqp.layers import RelationalGCN
-from molgan_vqp.policy_qc import JerbiAtomPolicy, JerbiEdgePolicy
+from molgan_vqp.policy_qc import AtomPolicy, EdgePolicy
 
 # Atomic limits and valence rules
 MAX_VALENCES = {
@@ -27,14 +27,14 @@ BOND_ORDERS = {
 }
 
 
-class ActorRGCN_Jerbi(nn.Module):
+class ActorRGCN(nn.Module):
     """
-    Autoregressive Graph Convolutional Actor with Jerbi et al. (NeurIPS 2021)
+    Autoregressive Graph Convolutional Actor with et al. (NeurIPS 2021)
     Variational Quantum Policies (Softmax-PQC with Multi-Layer Data Re-Uploading):
 
-      - Atom Policy: 4-Qubit Jerbi Softmax-PQC over heavy atoms {C, N, O, F}
+      - Atom Policy: 4-Qubit Softmax-PQC over heavy atoms {C, N, O, F}
         Data re-uploading layers + CNOT entanglement + Pauli-Z expectation values + Softmax
-      - Bond Policy: 4-Qubit Jerbi Softmax-PQC over Kekule bonds {None, Single, Double, Triple}
+      - Bond Policy: 4-Qubit Softmax-PQC over Kekule bonds {None, Single, Double, Triple}
         Data re-uploading layers + CNOT entanglement + Pauli-Z expectation values + Softmax
       - Valence and Chemical Masking ensuring 100% chemically valid molecules
     """
@@ -42,7 +42,7 @@ class ActorRGCN_Jerbi(nn.Module):
                  node_dim=5, hidden_dims=[128, 64], dropout_rate=0.0,
                  n_layers_atom=3, n_layers_edge=3, output_scale=3.0,
                  use_valence_mask=True, enforce_connectivity=True, use_atom_filters=True):
-        super(ActorRGCN_Jerbi, self).__init__()
+        super(ActorRGCN, self).__init__()
         self.max_atoms = max_atoms
         self.min_atoms = min_atoms
         self.num_atom_types = num_atom_types
@@ -60,17 +60,17 @@ class ActorRGCN_Jerbi(nn.Module):
             dropout_rate=dropout_rate
         )
 
-        # 2. Jerbi Data Re-Uploading Softmax-PQC for Atom Selection (4 qubits -> C, N, O, F)
-        self.atom_policy = JerbiAtomPolicy(
+        # 2. Data Re-Uploading Softmax-PQC for Atom Selection (4 qubits -> C, N, O, F)
+        self.atom_policy = AtomPolicy(
             in_features=self.encoder.out_dim,
             n_layers=n_layers_atom,
             output_scale=output_scale,
             learnable_scale=True
         )
 
-        # 3. Jerbi Data Re-Uploading Softmax-PQC for Edge Selection (4 qubits -> None, Single, Double, Triple)
+        # 3. Data Re-Uploading Softmax-PQC for Edge Selection (4 qubits -> None, Single, Double, Triple)
         pair_in_dim = self.encoder.out_dim * 3
-        self.edge_policy = JerbiEdgePolicy(
+        self.edge_policy = EdgePolicy(
             in_features=pair_in_dim,
             n_layers=n_layers_edge,
             output_scale=output_scale,
@@ -78,12 +78,12 @@ class ActorRGCN_Jerbi(nn.Module):
         )
 
     def forward_atom(self, graph_emb):
-        """Invokes Jerbi Atom Policy."""
+        """Invokes Atom Policy."""
         logits, _ = self.atom_policy(graph_emb)
         return logits
 
     def forward_edge(self, pair_feat):
-        """Invokes Jerbi Bond Policy."""
+        """Invokes Bond Policy."""
         logits, _ = self.edge_policy(pair_feat)
         return logits
 
@@ -141,7 +141,7 @@ class ActorRGCN_Jerbi(nn.Module):
 
     def generate_mols(self, batch_size, device=None, temperature=1.2, min_atoms=None, max_atoms=None, target_sizes=None):
         """
-        Autoregressively generates molecules using Jerbi Softmax-PQCs with dynamic atom sizes (e.g. 4 to 9).
+        Autoregressively generates molecules using Softmax-PQCs with dynamic atom sizes (e.g. 4 to 9).
         """
         if device is None:
             device = next(self.parameters()).device
@@ -182,7 +182,7 @@ class ActorRGCN_Jerbi(nn.Module):
             else:
                 _, graph_emb = self.forward_subgraph(node_features, adj_tensor, active_mask)
 
-            # 2. Jerbi Atom Policy execution
+            # 2 Atom Policy execution
             q_logits = self.forward_atom(graph_emb)
 
             # Enforce Carbon anchor on Step 0 and cap heteroatoms at 4 (if atom filters enabled)
@@ -224,7 +224,7 @@ class ActorRGCN_Jerbi(nn.Module):
                     node_features[b, step, 0] = 1.0
                     active_mask[b, step] = 0.0
 
-            # 3. Jerbi Edge formation head
+            # 3.  Edge formation head
             if step > 0:
                 node_emb, graph_emb = self.forward_subgraph(node_features, adj_tensor, active_mask)
                 u = step

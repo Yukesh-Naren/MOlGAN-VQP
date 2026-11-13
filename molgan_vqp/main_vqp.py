@@ -2,9 +2,9 @@ import os
 import argparse
 from datetime import datetime
 try:
-    from molgan_vqp.solver_ import SolverJerbiVQP
+    from molgan_vqp.solver_ import Solver_VQP
 except ImportError:
-    from molgan_vqp.solver_vqp import SolverJerbiVQP
+    from molgan_vqp.solver_vqp import Solver_VQP
 
 
 def parse_args():
@@ -34,7 +34,7 @@ def parse_args():
                         help='Maximum allowed occurrences per Bemis-Murcko scaffold before penalty')
 
     # Learning Rates
-    parser.add_argument('--lr_actor', type=float, default=1e-4, help='Learning rate for Jerbi Actor policy')
+    parser.add_argument('--lr_actor', type=float, default=1e-4, help='Learning rate for Actor policy')
     parser.add_argument('--lr_critic', type=float, default=1e-3, help='Learning rate for Value Critic')
     parser.add_argument('--lr_disc', type=float, default=1e-4, help='Learning rate for Discriminator')
 
@@ -66,6 +66,8 @@ def parse_args():
     parser.add_argument('--no_atom_filters', action='store_true', default=False,
                         help='Disable step 0 Carbon anchor and heteroatom cap filters')
 
+    parser.add_argument('--reference_smiles', type=str, default=None,
+                        help='Optional path to reference SMILES (e.g. data/qm9.smi) for novelty evaluation against external catalog')
     parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'],
                         help='Device for training (cuda or cpu)')
 
@@ -85,7 +87,7 @@ def main():
         print(f"  {arg:<22} : {val}")
     print("=" * 75)
 
-    solver = SolverJerbiVQP(
+    solver = Solver_VQP(
         dataset_path=args.dataset_path,
         save_dir=run_save_dir,
         batch_size=args.batch_size,
@@ -114,6 +116,7 @@ def main():
         min_atoms=args.min_atoms,
         max_atoms=args.max_atoms,
         num_edge_types=args.num_edge_types,
+        reference_smiles=args.reference_smiles,
         device=args.device
     )
 

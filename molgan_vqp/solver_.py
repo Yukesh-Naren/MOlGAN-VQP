@@ -24,7 +24,7 @@ from molgan_vqp.reward import (
     calculate_logp,
     CompositeRewardCalculator
 )
-from molgan_vqp.models_vqp import ActorRGCN_Jerbi, CriticRGCN, DiscriminatorRGCN
+from molgan_vqp.models_vqp import ActorRGCN, CriticRGCN, DiscriminatorRGCN
 from molgan_vqp.ppo_buffer import PPOBuffer
 
 
@@ -51,6 +51,24 @@ class QM9Dataset(Dataset):
         self.num_edge_types = num_edge_types
         self.num_samples = len(self.data_X)
 
+        # Store canonical reference SMILES for exact novelty evaluation
+        self.smiles = set()
+        raw_smiles = data.get('smiles', [])
+        for s in raw_smiles:
+            try:
+                m = Chem.MolFromSmiles(s)
+                if m is not None:
+                    self.smiles.add(Chem.MolToSmiles(m))
+                else:
+                    self.smiles.add(s)
+            except Exception:
+                self.smiles.add(s)
+
+        # Fallback to data/qm9.smi if dataset pickle did not contain smiles
+        if not self.smiles and os.path.exists('data/qm9.smi'):
+            with open('data/qm9.smi', 'r') as f:
+                self.smiles = set(line.strip() for line in f if line.strip())
+
     def __len__(self):
         return self.num_samples
 
@@ -70,7 +88,7 @@ class QM9Dataset(Dataset):
         return torch.tensor(x_onehot), torch.tensor(a_onehot), torch.tensor(self.labels[idx], dtype=torch.float32)
 
 
-class SolverJerbiVQP:
+class Solver_VQP:
     """
     Dedicated Training Solver for MolGAN with Jerbi et al. (NeurIPS 2021)
     Variational Quantum Policies (Softmax-PQC with Multi-Layer Data Re-Uploading).
@@ -82,7 +100,7 @@ class SolverJerbiVQP:
                  n_layers_atom=3, n_layers_edge=3, output_scale=3.0,
                  use_valence_mask=True, use_filter=True, use_scaffold_memory=True,
                  use_tanimoto=True, enforce_connectivity=True, use_atom_filters=True,
-                 min_atoms=4, max_atoms=9, num_edge_types=4, device='cuda'):
+                 min_atoms=4, max_atoms=9, num_edge_types=4, reference_smiles=None, device='cuda'):
 
         self.dataset_path = dataset_path
         self.save_dir = save_dir
@@ -112,6 +130,7 @@ class SolverJerbiVQP:
         self.min_atoms = min_atoms
         self.max_atoms = max_atoms
         self.num_edge_types = num_edge_types
+        self.reference_smiles = reference_smiles
         self.device = torch.device(device if torch.cuda.is_available() and device == 'cuda' else 'cpu')
 
         # Setup directory paths
@@ -127,15 +146,27 @@ class SolverJerbiVQP:
         self.logger.info(f"Loading QM9 dataset from {self.dataset_path}...")
         self.dataset = QM9Dataset(self.dataset_path, num_edge_types=self.num_edge_types)
         self.dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=True)
-        self.logger.info(f"Dataset loaded: {len(self.dataset)} molecules.")
+
+        self.train_smiles = getattr(self.dataset, 'smiles', set())
+        if self.reference_smiles and os.path.exists(self.reference_smiles):
+            self.logger.info(f"Loading external reference SMILES from {self.reference_smiles}...")
+            with open(self.reference_smiles, 'r') as f:
+                self.dataset_smiles = set(line.strip() for line in f if line.strip())
+        elif os.path.exists('data/qm9.smi'):
+            with open('data/qm9.smi', 'r') as f:
+                self.dataset_smiles = set(line.strip() for line in f if line.strip())
+        else:
+            self.dataset_smiles = self.train_smiles
+
+        self.logger.info(f"Dataset loaded: {len(self.dataset)} molecules ({len(self.train_smiles)} train SMILES, {len(self.dataset_smiles)} QM9 reference SMILES).")
 
         # 2. Quantum Physical-Chemical Evaluator
         self.logger.info("Initializing 4-Qubit Variational Quantum Property Evaluator...")
         self.quantum_evaluator = QuantumPhysChemEvaluator(n_qubits=4, n_layers=2)
 
-        # 3. Networks: Actor with Jerbi Softmax-PQC Heads, Critic, Discriminator
-        self.logger.info(f"Initializing Jerbi Softmax-PQC Actor (Atom Layers: {self.n_layers_atom}, Edge Layers: {self.n_layers_edge}), Critic, Discriminator...")
-        self.actor = ActorRGCN_Jerbi(
+        # 3. Networks: Actor with Softmax-PQC Heads, Critic, Discriminator
+        self.logger.info(f"Initializing Softmax-PQC Actor (Atom Layers: {self.n_layers_atom}, Edge Layers: {self.n_layers_edge}), Critic, Discriminator...")
+        self.actor = ActorRGCN(
             max_atoms=self.max_atoms,
             min_atoms=self.min_atoms,
             num_atom_types=4,
@@ -179,7 +210,7 @@ class SolverJerbiVQP:
         self.best_reward = -float('inf')
 
     def _setup_logging(self):
-        self.logger = logging.getLogger("MolGAN_Jerbi_VQP")
+        self.logger = logging.getLogger("MolGAN_VQP")
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
             fh = logging.FileHandler(os.path.join(self.log_dir, 'train.log'))
@@ -215,7 +246,7 @@ class SolverJerbiVQP:
             real_a = real_a.to(self.device)
 
             # -------------------------------------------------------------
-            # PHASE 1: Trajectory Rollout from Jerbi Softmax-PQC Actor
+            # PHASE 1: Trajectory Rollout from Softmax-PQC Actor
             # -------------------------------------------------------------
             with torch.no_grad():
                 nodes, edges, node_feat, adj_t, trajs = self.actor.generate_mols(
@@ -253,7 +284,7 @@ class SolverJerbiVQP:
             loss_d_list.append(loss_d.item())
 
             # -------------------------------------------------------------
-            # PHASE 3: PPO Policy Update for Jerbi Actor & Critic
+            # PHASE 3: PPO Policy Update for Actor & Critic
             # -------------------------------------------------------------
             buf_data = self.buffer.get_data()
 
@@ -303,8 +334,16 @@ class SolverJerbiVQP:
         if valid_mols:
             stable_rate = sum(1 for m in valid_mols if calculate_sas(m) > 0.0) / len(valid_mols) * 100.0
             smiles = [Chem.MolToSmiles(m) for m in valid_mols]
-            unique_rate = len(set(smiles)) / max(len(smiles), 1) * 100.0
-            novel_rate = 99.0  # Approximated against QM9 lookup
+            unique_smiles = set(smiles)
+            unique_rate = len(unique_smiles) / max(len(smiles), 1) * 100.0
+
+            if self.dataset_smiles:
+                novel_count = sum(1 for s in unique_smiles if s not in self.dataset_smiles)
+                novel_rate = (novel_count / max(len(unique_smiles), 1)) * 100.0
+            else:
+                novel_rate = 100.0
+
+            novel_train = (sum(1 for s in unique_smiles if s not in self.train_smiles) / max(len(unique_smiles), 1)) * 100.0 if self.train_smiles else 100.0
 
             mean_qed = float(np.mean([calculate_qed(m) for m in valid_mols]))
             mean_logp = float(np.mean([calculate_logp(m) for m in valid_mols]))
@@ -312,7 +351,7 @@ class SolverJerbiVQP:
             mean_np = float(np.mean([calculate_np(m) for m in valid_mols]))
             mean_dc = float(np.mean([calculate_dc(m) for m in valid_mols]))
         else:
-            stable_rate = unique_rate = novel_rate = 0.0
+            stable_rate = unique_rate = novel_rate = novel_train = 0.0
             mean_qed = mean_logp = mean_sas = mean_np = mean_dc = 0.0
 
         avg_loss_d = float(np.mean(loss_d_list))
@@ -325,8 +364,8 @@ class SolverJerbiVQP:
             f"[Epoch {epoch:03d}/{self.epochs:03d}] ({epoch_time:.1f}s) | "
             f"Loss_D: {avg_loss_d:.4f} | Loss_Pi: {avg_loss_pi:.4f} | Loss_V: {avg_loss_v:.4f} | "
             f"R_avg: {avg_reward:.4f} | Valid: {valid_rate:.1f}% | Stable: {stable_rate:.1f}% | "
-            f"Unique: {unique_rate:.1f}% | Novel: {novel_rate:.1f}% | QED: {mean_qed:.3f} | "
-            f"SAS: {mean_sas:.3f} | DC: {mean_dc:.3f}"
+            f"Unique: {unique_rate:.1f}% | Novel(QM9): {novel_rate:.1f}% (vs 5k: {novel_train:.1f}%) | "
+            f"QED: {mean_qed:.3f} | SAS: {mean_sas:.3f} | DC: {mean_dc:.3f}"
         )
 
         # Append CSV metrics
@@ -365,9 +404,9 @@ class SolverJerbiVQP:
         self.logger.info(f"Saved checkpoint ({tag}) to {self.model_dir}")
 
     def train(self):
-        self.logger.info(f"Starting Jerbi Softmax-PQC Training for {self.epochs} epochs...")
+        self.logger.info(f"Starting Softmax-PQC Training for {self.epochs} epochs...")
         start_all = time.time()
         for epoch in range(1, self.epochs + 1):
             self.train_epoch(epoch)
         total_time = (time.time() - start_all) / 60.0
-        self.logger.info(f"Jerbi Q-Policy Training completed in {total_time:.2f} minutes.")
+        self.logger.info(f"Q-Policy Training completed in {total_time:.2f} minutes.")

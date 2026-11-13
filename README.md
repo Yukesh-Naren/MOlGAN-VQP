@@ -51,6 +51,19 @@ Deep generative models for molecular graphs are transforming rational drug desig
 | **QGAN-HG** *(Quantum GAN with Hybrid Gen)* | 61.40 | 10.12 | 97.90 | 0.52 | 31 | 50 |
 | **MolGAN-QPolicy (Ours)** | **99.47** | **62.37** | **98.80** | **0.88** | **288** | **447** |
 
+### 🧬 MolGAN-VQP (Variational Quantum Policies - 200 Epochs Benchmark, $N=1,000$)
+
+Extending quantum reinforcement learning with dual 4-qubit Softmax-PQCs and multi-layer data re-uploading (*Jerbi et al., NeurIPS 2021*), MolGAN-VQP completed 200 full training epochs on 5,000 natural QM9 molecules:
+
+| Architecture / Model | Quantum Role | Qubits | Validity (%) ↑ | Stability (%) ↑ | Uniqueness (%) ↑ | Novelty (%) ↑ | NVU (=1000$) ↑ | Diversity ↑ | QED ↑ | DC Score ↑ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **MolGAN** *(De Cao & Kipf, 2018)* | None (Classical GAN) | 0 | 67.20 | — | 2.10 | 97.40 | 14 | 0.32 | 0.33 | 0.52 |
+| **MolGAN-QRL** *(Hergli et al., 2026)* | Reward Evaluator | 9 | 69.68 | — | 8.36 | 98.20 | 58 | 0.49 | 0.35 | 0.58 |
+| **MolGAN-QRL-S** *(Hergli et al., 2026)* | Reward Evaluator (Single) | 9 | 49.40 | — | 4.47 | 96.80 | 22 | 0.41 | 0.36 | 0.36 |
+| **QGAN-HG** *(Hergli et al., 2026)* | Generator Output Head | 8–10 | 61.40 | — | 10.12 | 97.90 | 62 | 0.52 | 0.34 | 0.57 |
+| **GCPN** *(You et al., NeurIPS 2018)* | None (Classical RL) | 0 | **100.00** | ~80.0 | **85.20** | **100.00** | **852** | 0.67 | 0.38 | 0.61 |
+| **MolGAN-VQP (This Work - 200 Epochs)** | **Variational Policy Head** | **4** | **100.00** | **86.80** | 45.20 | 97.35 | 452 | **0.910** | **0.391** | **0.780** |
+
 > **Cheminformatics Validation**: 3-tier screening shows **89.0%** of generated unique structures are readily preparable bench compounds with standard synthetic accessibility ($\text{Raw SAS} \le 5.0$), verified 3D Euclidean embeddability, and zero ring/allene strain alerts.
 
 ---
